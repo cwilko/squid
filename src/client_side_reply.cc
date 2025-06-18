@@ -90,6 +90,7 @@ clientReplyContext::clientReplyContext(ClientHttpRequest *clientContext) :
     old_sc(NULL),
     old_lastmod(-1),
     deleting(false),
+    rangeForwardingChecked(false),
     collapsedRevalidation(crNone)
 {
     *tempbuf = 0;
@@ -2195,9 +2196,14 @@ clientReplyContext::sendMoreData (StoreIOBuffer result)
         return;
 
     // Check if we should forward range request to upstream
-    if (shouldForwardRangeToUpstream()) {
+    // Only check on the first call to avoid infinite loops
+    if (!rangeForwardingChecked && shouldForwardRangeToUpstream()) {
+        debugs(88, 3, "First time range forwarding check - forwarding to upstream");
+        rangeForwardingChecked = true;
         forwardRangeRequestToUpstream();
         return;
+    } else if (rangeForwardingChecked) {
+        debugs(88, 5, "Range forwarding already checked, proceeding with normal data flow");
     }
 
     StoreEntry *entry = http->storeEntry();

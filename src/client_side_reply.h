@@ -147,6 +147,9 @@ private:
 
     bool deleting;
 
+    /// Range request forwarding state tracking
+    bool rangeForwardingChecked;
+
     /// Range request optimization functions
     bool shouldForwardRangeToUpstream() const;
     void forwardRangeRequestToUpstream();
