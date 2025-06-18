@@ -709,14 +709,22 @@ clientReplyContext::cacheHit(StoreIOBuffer result)
     debugs(88, 5, "plain old HIT");
 
 #if USE_DELAY_POOLS
-    if (e->store_status != STORE_OK)
-        http->logType.update(LOG_TCP_MISS);
-    else
+    if (e->store_status != STORE_OK) {
+        // Check if this was actually served from cache despite PENDING status
+        if (e->store_status == STORE_PENDING && wasServedFromCache()) {
+            debugs(88, 3, "STORE_PENDING entry served from cache, logging as TCP_HIT");
+            http->logType.update(LOG_TCP_HIT);
+        } else {
+            http->logType.update(LOG_TCP_MISS);
+        }
+    } else
 #endif
         if (e->mem_status == IN_MEMORY)
             http->logType.update(LOG_TCP_MEM_HIT);
         else if (Config.onoff.offline)
             http->logType.update(LOG_TCP_OFFLINE_HIT);
+        else
+            http->logType.update(LOG_TCP_HIT);
 
     sendMoreData(result);
 }
@@ -2186,6 +2194,12 @@ clientReplyContext::sendMoreData (StoreIOBuffer result)
     if (deleting)
         return;
 
+    // Check if we should forward range request to upstream
+    if (shouldForwardRangeToUpstream()) {
+        forwardRangeRequestToUpstream();
+        return;
+    }
+
     StoreEntry *entry = http->storeEntry();
 
     if (ConnStateData * conn = http->getConn()) {
@@ -2329,6 +2343,68 @@ clientReplyContext::createStoreEntry(const HttpRequestMethod& m, RequestFlags re
      * this function CAN NOT be used to manage errors
      */
     http->storeEntry(e);
+}
+
+/// Check if a range request should be forwarded to upstream instead of waiting
+bool
+clientReplyContext::shouldForwardRangeToUpstream() const
+{
+    // Check if the feature is enabled
+    if (!Config.onoff.rangeForwardOnCacheMiss)
+        return false;
+
+    // Only apply to range requests
+    if (!http->request->range)
+        return false;
+
+    // Only apply if we have a store entry
+    StoreEntry *entry = http->storeEntry();
+    if (!entry || !entry->mem_obj)
+        return false;
+
+    // Only for entries that are still being downloaded
+    if (entry->store_status != STORE_PENDING)
+        return false;
+
+    // Check if the range starts beyond currently downloaded data
+    int64_t rangeStart = http->request->range->firstOffset();
+    if (rangeStart < 0) {
+        // Handle suffix ranges (bytes=-X) - they should wait for more data
+        return false;
+    }
+
+    int64_t availableBytes = entry->mem_obj->endOffset();
+    bool shouldForward = (rangeStart > availableBytes);
+
+    debugs(88, 3, "Range request analysis: start=" << rangeStart << 
+                  " available=" << availableBytes << 
+                  " shouldForward=" << shouldForward);
+
+    return shouldForward;
+}
+
+/// Forward a range request to upstream instead of serving from cache
+void
+clientReplyContext::forwardRangeRequestToUpstream()
+{
+    debugs(88, 3, "Range start beyond cached data, creating new upstream request");
+
+    // Remove current store reference
+    removeClientStoreReference(&sc, http);
+
+    // Mark as cache miss for logging
+    http->logType.update(LOG_TCP_MISS);
+
+    // Process as a miss to create new upstream request
+    processMiss();
+}
+
+/// Check if request was served from cache (even if store status is PENDING)
+bool
+clientReplyContext::wasServedFromCache() const
+{
+    // Check if hierarchy indicates local cache serving (no upstream contact)
+    return (http->request->hier.code == HIER_NONE);
 }
 
 ErrorState *

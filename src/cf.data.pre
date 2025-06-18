@@ -6991,6 +6991,26 @@ DOC_START
 	See also: collapsed_forwarding.
 DOC_END
 
+NAME: range_forward_on_cache_miss
+COMMENT: (on|off)  
+TYPE: onoff
+LOC: Config.onoff.rangeForwardOnCacheMiss
+DEFAULT: off
+DOC_START
+	When enabled, if a range request's start offset is beyond the currently
+	downloaded data in cache, forward the entire request to upstream instead
+	of waiting for more data to be downloaded locally.
+	
+	This can improve response times for range requests that seek far ahead
+	in large files that are still being downloaded by other clients.
+	
+	When disabled (default), range requests will wait for the sequential
+	download to reach the requested offset before being served from cache.
+	
+	This option only affects range requests for cache entries that are
+	currently being downloaded (STORE_PENDING status).
+DOC_END
+
 NAME: shared_transient_entries_limit collapsed_forwarding_shared_entries_limit
 COMMENT: (number of entries)
 TYPE: int64_t

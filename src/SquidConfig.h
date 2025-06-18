@@ -344,6 +344,7 @@ public:
 #if USE_OPENSSL
         bool logTlsServerHelloDetails;
 #endif
+        int rangeForwardOnCacheMiss;
     } onoff;
 
     int64_t shared_transient_entries_limit;

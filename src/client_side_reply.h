@@ -147,6 +147,13 @@ private:
 
     bool deleting;
 
+    /// Range request optimization functions
+    bool shouldForwardRangeToUpstream() const;
+    void forwardRangeRequestToUpstream();
+    
+    /// Check if request was served from cache (even if store status is PENDING)
+    bool wasServedFromCache() const;
+
     typedef enum {
         crNone = 0, ///< collapsed revalidation is not allowed for this context
         crInitiator, ///< we initiated collapsed revalidation request
