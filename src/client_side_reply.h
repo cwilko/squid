@@ -150,9 +150,15 @@ private:
     /// Range request forwarding state tracking
     bool rangeForwardingChecked;
 
+    /// Temporary store entry for range forwarding (non-cached)
+    StoreEntry *tempRangeEntry;
+    store_client *tempSc;
+
     /// Range request optimization functions
     bool shouldForwardRangeToUpstream() const;
     void forwardRangeRequestToUpstream();
+    void handleRangeForwardData(StoreIOBuffer result);
+    void cleanupRangeForwarding();
     
     /// Check if request was served from cache (even if store status is PENDING)
     bool wasServedFromCache() const;

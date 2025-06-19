@@ -67,6 +67,8 @@ clientReplyContext::~clientReplyContext()
     /* old_entry might still be set if we didn't yet get the reply
      * code in HandleIMSReply() */
     removeStoreReference(&old_sc, &old_entry);
+    // Clean up range forwarding resources
+    cleanupRangeForwarding();
     safe_free(tempBuffer.data);
     cbdataReferenceDone(http);
     HTTPMSGUNLOCK(reply);
@@ -91,6 +93,8 @@ clientReplyContext::clientReplyContext(ClientHttpRequest *clientContext) :
     old_lastmod(-1),
     deleting(false),
     rangeForwardingChecked(false),
+    tempRangeEntry(nullptr),
+    tempSc(nullptr),
     collapsedRevalidation(crNone)
 {
     *tempbuf = 0;
@@ -2196,14 +2200,17 @@ clientReplyContext::sendMoreData (StoreIOBuffer result)
         return;
 
     // Check if we should forward range request to upstream
-    // Only check on the first call to avoid infinite loops
-    if (!rangeForwardingChecked && shouldForwardRangeToUpstream()) {
-        debugs(88, 3, "First time range forwarding check - forwarding to upstream");
-        rangeForwardingChecked = true;
-        forwardRangeRequestToUpstream();
-        return;
-    } else if (rangeForwardingChecked) {
-        debugs(88, 5, "Range forwarding already checked, proceeding with normal data flow");
+    // Only forward once per instance to avoid infinite loops
+    if (!rangeForwardingChecked) {
+        if (shouldForwardRangeToUpstream()) {
+            debugs(88, 3, "Range beyond downloaded data - forwarding to upstream");
+            rangeForwardingChecked = true;
+            forwardRangeRequestToUpstream();
+            return;
+        } else {
+            debugs(88, 5, "Range within downloaded data or not a range request - serving from cache");
+            rangeForwardingChecked = true; // Mark as checked to prevent rechecking
+        }
     }
 
     StoreEntry *entry = http->storeEntry();
@@ -2393,16 +2400,45 @@ clientReplyContext::shouldForwardRangeToUpstream() const
 void
 clientReplyContext::forwardRangeRequestToUpstream()
 {
-    debugs(88, 3, "Range start beyond cached data, creating new upstream request");
-
-    // Remove current store reference
-    removeClientStoreReference(&sc, http);
-
+    debugs(88, 3, "Range beyond cached data, creating temporary HTTP request");
+    
+    // CRITICAL: DON'T touch the original cache entry or store client
+    // The original cache entry and our registration with it remain intact
+    // We simply set up a parallel pipeline that takes over for this request
+    // When we return from sendMoreData(), the original pipeline becomes dormant
+    // but the cache entry remains available for future requests
+    
+    // Create temporary store entry just for FwdState (won't be cached)
+    // Use non-cachable flags to ensure it gets a private key
+    RequestFlags tempFlags;
+    tempFlags.cachable = false;  // This will make storeCreateEntry use private key
+    tempFlags.hierarchical = false;
+    
+    tempRangeEntry = storeCreateEntry(
+        http->request->storeId(),     // Same URL  
+        http->log_uri,               // Log URI
+        tempFlags,                   // Non-cachable flags
+        http->request->method        // GET
+    );
+    
+    tempRangeEntry->lock("rangeForward");
+    
+    // Forward using standard HTTP mechanism
+    Comm::ConnectionPointer conn = http->getConn() ? http->getConn()->clientConnection : nullptr;
+    FwdState::Start(conn, tempRangeEntry, http->request, http->al);
+    
+    // Set up to read response and send directly to client
+    tempSc = storeClientListAdd(tempRangeEntry, this);
+    StoreIOBuffer buf;
+    buf.data = next()->readBuffer.data;
+    buf.length = next()->readBuffer.length;
+    buf.offset = 0;
+    
+    storeClientCopy(tempSc, tempRangeEntry, buf, 
+                    HandleRangeForwardData, this);
+    
     // Mark as cache miss for logging
     http->logType.update(LOG_TCP_MISS);
-
-    // Process as a miss to create new upstream request
-    processMiss();
 }
 
 /// Check if request was served from cache (even if store status is PENDING)
@@ -2411,6 +2447,79 @@ clientReplyContext::wasServedFromCache() const
 {
     // Check if hierarchy indicates local cache serving (no upstream contact)
     return (http->request->hier.code == HIER_NONE);
+}
+
+/// Static callback for range forwarding data
+static void
+HandleRangeForwardData(void *data, StoreIOBuffer result)
+{
+    clientReplyContext *context = static_cast<clientReplyContext*>(data);
+    context->handleRangeForwardData(result);
+}
+
+/// Handle range forwarding response data
+void
+clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
+{
+    // Check if we're still valid (client might have disconnected)
+    if (deleting) {
+        debugs(88, 3, "Range forward data received but context is being deleted");
+        cleanupRangeForwarding();
+        return;
+    }
+
+    // Handle errors first
+    if (result.flags.error) {
+        debugs(88, 3, "Range forward error: " << result.xerrno);
+        cleanupRangeForwarding();
+        // TODO: Could fall back to cache or send error to client
+        return;
+    }
+    
+    // Forward HTTP response data to client through normal pipeline
+    // The tempRangeEntry should contain proper HTTP headers (206, Content-Range, etc.)
+    if (result.length > 0) {
+        debugs(88, 5, "Forwarding " << result.length << " bytes of range data to client");
+        // Get the reply from the temporary store entry
+        HttpReply *tempReply = tempRangeEntry ? tempRangeEntry->getReply() : nullptr;
+        clientStreamCallback((clientStreamNode*)http->client_stream.head->data,
+                             http, tempReply, result);
+    }
+    
+    if (result.flags.eof) {
+        // End of range data - clean up
+        debugs(88, 3, "Range forward complete, cleaning up");
+        cleanupRangeForwarding();
+    } else if (result.length > 0) {
+        // Continue reading more data
+        StoreIOBuffer nextBuf;
+        nextBuf.data = next()->readBuffer.data;
+        nextBuf.length = next()->readBuffer.length;
+        nextBuf.offset = result.offset + result.length;
+        
+        storeClientCopy(tempSc, tempRangeEntry, nextBuf,
+                        HandleRangeForwardData, this);
+    }
+}
+
+/// Clean up range forwarding resources
+void
+clientReplyContext::cleanupRangeForwarding()
+{
+    // Unregister store client
+    if (tempSc) {
+        storeUnregister(tempSc, tempRangeEntry, this);
+        tempSc = nullptr;
+    }
+    
+    // Unlock and clean up temporary entry
+    if (tempRangeEntry) {
+        tempRangeEntry->unlock("rangeForward");
+        tempRangeEntry = nullptr;
+    }
+    
+    // Original cache entry and store client remain intact
+    // Future requests will find the original cache entry
 }
 
 ErrorState *
