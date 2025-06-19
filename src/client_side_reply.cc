@@ -2396,6 +2396,9 @@ clientReplyContext::shouldForwardRangeToUpstream() const
     return shouldForward;
 }
 
+/// Static callback for range forwarding data
+static void HandleRangeForwardData(void *data, StoreIOBuffer result);
+
 /// Forward a range request to upstream instead of serving from cache
 void
 clientReplyContext::forwardRangeRequestToUpstream()
@@ -2415,7 +2418,7 @@ clientReplyContext::forwardRangeRequestToUpstream()
     tempFlags.hierarchical = false;
     
     tempRangeEntry = storeCreateEntry(
-        http->request->storeId(),     // Same URL  
+        storeId(),                   // Same URL (const char*)
         http->log_uri,               // Log URI
         tempFlags,                   // Non-cachable flags
         http->request->method        // GET
@@ -2470,7 +2473,7 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
 
     // Handle errors first
     if (result.flags.error) {
-        debugs(88, 3, "Range forward error: " << result.xerrno);
+        debugs(88, 3, "Range forward error detected");
         cleanupRangeForwarding();
         // TODO: Could fall back to cache or send error to client
         return;
@@ -2481,12 +2484,12 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     if (result.length > 0) {
         debugs(88, 5, "Forwarding " << result.length << " bytes of range data to client");
         // Get the reply from the temporary store entry
-        HttpReply *tempReply = tempRangeEntry ? tempRangeEntry->getReply() : nullptr;
+        HttpReply *tempReply = tempRangeEntry ? &tempRangeEntry->mem().baseReply() : nullptr;
         clientStreamCallback((clientStreamNode*)http->client_stream.head->data,
                              http, tempReply, result);
     }
     
-    if (result.flags.eof) {
+    if (result.length == 0) {
         // End of range data - clean up
         debugs(88, 3, "Range forward complete, cleaning up");
         cleanupRangeForwarding();

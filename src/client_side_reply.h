@@ -157,8 +157,10 @@ private:
     /// Range request optimization functions
     bool shouldForwardRangeToUpstream() const;
     void forwardRangeRequestToUpstream();
-    void handleRangeForwardData(StoreIOBuffer result);
     void cleanupRangeForwarding();
+
+public:
+    void handleRangeForwardData(StoreIOBuffer result);
     
     /// Check if request was served from cache (even if store status is PENDING)
     bool wasServedFromCache() const;
