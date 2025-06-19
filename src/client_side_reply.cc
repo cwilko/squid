@@ -2480,13 +2480,11 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     }
     
     // Forward HTTP response data to client through normal pipeline
-    // The tempRangeEntry should contain proper HTTP headers (206, Content-Range, etc.)
     if (result.length > 0) {
         debugs(88, 5, "Forwarding " << result.length << " bytes of range data to client");
-        // Get the reply from the temporary store entry
-        const HttpReply *tempReply = tempRangeEntry ? &tempRangeEntry->mem().baseReply() : nullptr;
+        // Use NULL for reply since this is just forwarding data, not setting up new headers
         clientStreamCallback((clientStreamNode*)http->client_stream.head->data,
-                             http, tempReply, result);
+                             http, NULL, result);
     }
     
     if (result.length == 0) {
