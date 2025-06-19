@@ -2484,7 +2484,7 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     if (result.length > 0) {
         debugs(88, 5, "Forwarding " << result.length << " bytes of range data to client");
         // Get the reply from the temporary store entry
-        HttpReply *tempReply = tempRangeEntry ? &tempRangeEntry->mem().baseReply() : nullptr;
+        const HttpReply *tempReply = tempRangeEntry ? &tempRangeEntry->mem().baseReply() : nullptr;
         clientStreamCallback((clientStreamNode*)http->client_stream.head->data,
                              http, tempReply, result);
     }
