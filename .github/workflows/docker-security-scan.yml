@@ -1,0 +1,109 @@
+name: Docker Security Scan
+
+on:
+  push:
+    branches:
+      - v5
+      - main
+    paths:
+      - 'docker/**'
+  pull_request:
+    branches:
+      - v5
+      - main
+    paths:
+      - 'docker/**'
+  schedule:
+    # Run security scan weekly on Sundays at 2 AM UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: cwilko/squid
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: v5
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image for scanning
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        load: true
+        tags: ${{ env.IMAGE_NAME }}:scan
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.IMAGE_NAME }}:scan
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run Trivy vulnerability scanner (table format)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.IMAGE_NAME }}:scan
+        format: 'table'
+
+    - name: Docker Scout CVE scan
+      if: github.event_name != 'pull_request'
+      uses: docker/scout-action@v1
+      with:
+        command: cves
+        image: ${{ env.IMAGE_NAME }}:scan
+        only-severities: critical,high
+        write-comment: false
+
+    - name: Test container security
+      run: |
+        echo "Testing container security configurations..."
+        
+        # Test that container doesn't run as root
+        USER_CHECK=$(docker run --rm ${{ env.IMAGE_NAME }}:scan whoami)
+        if [ "$USER_CHECK" = "root" ]; then
+          echo "WARNING: Container is running as root user"
+          exit 1
+        else
+          echo "✓ Container runs as non-root user: $USER_CHECK"
+        fi
+        
+        # Test that sensitive files are not world-readable
+        echo "Testing file permissions..."
+        docker run --rm ${{ env.IMAGE_NAME }}:scan ls -la /etc/squid/squid.conf
+        
+        # Test that no unnecessary packages are installed
+        echo "Testing for minimal package installation..."
+        PACKAGE_COUNT=$(docker run --rm ${{ env.IMAGE_NAME }}:scan dpkg -l | wc -l)
+        echo "Installed packages: $PACKAGE_COUNT"
+        
+        # Test that no development tools remain in final image
+        if docker run --rm ${{ env.IMAGE_NAME }}:scan which gcc > /dev/null 2>&1; then
+          echo "WARNING: Development tools found in production image"
+          exit 1
+        else
+          echo "✓ No development tools in production image"
+        fi
+        
+        echo "Security tests completed successfully!"

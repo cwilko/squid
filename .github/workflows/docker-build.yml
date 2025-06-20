@@ -1,0 +1,173 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - v5
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'src/**'
+      - 'docker/**'
+      - '.github/workflows/docker-build.yml'
+  pull_request:
+    branches:
+      - v5
+      - main
+    paths:
+      - 'src/**'
+      - 'docker/**'
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Push image to Docker Hub'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: cwilko/squid
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: v5
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=range-forwarding
+          type=sha,prefix={{branch}}-
+        labels: |
+          org.opencontainers.image.title=Enhanced Squid Proxy
+          org.opencontainers.image.description=Squid Proxy with Range Forwarding optimization for large file downloads
+          org.opencontainers.image.vendor=cwilko
+          org.opencontainers.image.licenses=GPL-2.0+
+          org.opencontainers.image.source=https://github.com/cwilko/squid
+          org.opencontainers.image.documentation=https://github.com/cwilko/squid/blob/v5/docker/README.md
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: false
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        outputs: type=docker,dest=/tmp/squid-enhanced.tar
+
+    - name: Test Docker image
+      run: |
+        # Load the built image
+        docker load --input /tmp/squid-enhanced.tar
+        
+        # Get the first tag from the metadata
+        IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+        echo "Testing image: $IMAGE_TAG"
+        
+        # Test basic functionality
+        echo "Testing basic container startup..."
+        docker run --rm --name squid-test -d "$IMAGE_TAG"
+        
+        # Wait a moment for startup
+        sleep 10
+        
+        # Check if squid is running
+        docker exec squid-test ps aux | grep squid
+        
+        # Test configuration validation
+        echo "Testing configuration validation..."
+        docker exec squid-test squid -k parse
+        
+        # Check if range forwarding is configured
+        echo "Testing range forwarding configuration..."
+        docker exec squid-test grep -q "range_forward_on_cache_miss" /etc/squid/squid.conf
+        
+        # Check health
+        echo "Testing health check..."
+        docker exec squid-test squid -k check
+        
+        # Stop test container
+        docker stop squid-test
+        
+        echo "All tests passed!"
+
+    - name: Push Docker image
+      if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./docker/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Generate release notes
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        echo "## Enhanced Squid Proxy Release" > release-notes.md
+        echo "" >> release-notes.md
+        echo "### Features" >> release-notes.md
+        echo "- 🚀 **Range Forwarding Optimization**: Forwards out-of-range requests to upstream servers" >> release-notes.md
+        echo "- 📦 **Multi-architecture support**: AMD64 and ARM64 builds available" >> release-notes.md
+        echo "- 🔧 **Production ready**: Comprehensive feature set with SSL, auth, and caching" >> release-notes.md
+        echo "- 🐳 **Docker optimized**: Multi-stage build for minimal image size" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "### Docker Images" >> release-notes.md
+        echo "\`\`\`bash" >> release-notes.md
+        echo "# Pull the latest release" >> release-notes.md
+        echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GITHUB_REF#refs/tags/}" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "# Run with default configuration" >> release-notes.md
+        echo "docker run -d -p 3128:3128 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GITHUB_REF#refs/tags/}" >> release-notes.md
+        echo "\`\`\`" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "### Configuration" >> release-notes.md
+        echo "Range forwarding is enabled by default. Configure with:" >> release-notes.md
+        echo "\`\`\`" >> release-notes.md
+        echo "range_forward_on_cache_miss on" >> release-notes.md
+        echo "\`\`\`" >> release-notes.md
+
+    - name: Upload release notes
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: actions/upload-artifact@v3
+      with:
+        name: release-notes
+        path: release-notes.md
