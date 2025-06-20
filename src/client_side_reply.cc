@@ -2500,7 +2500,6 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     }
     
     // Replace the original store entry with the temporary one  
-    StoreEntry *originalEntry = http->storeEntry();
     http->storeEntry(tempRangeEntry);
     
     // Set up store client for the temporary entry
@@ -2511,7 +2510,6 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     tempRangeEntry = nullptr; // Transfer ownership to http->storeEntry()
     
     // Trigger normal sendMoreData flow which will now read from the temporary entry
-    clientStreamNode *ourNode = (clientStreamNode *)http->client_stream.tail->prev->data;
     clientGetMoreData(ourNode, http);
 }
 
