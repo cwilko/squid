@@ -115,8 +115,11 @@ RUN apt-get update && apt-get install -y \
 RUN if ! getent group proxy >/dev/null; then groupadd -r proxy; fi && \
     if ! getent passwd proxy >/dev/null; then useradd -r -g proxy proxy; fi
 
-# Copy built squid from builder stage
-COPY --from=builder /tmp/squid-install /
+# Copy built squid from builder stage (excluding conflicting directories)
+COPY --from=builder /tmp/squid-install/usr /usr/
+COPY --from=builder /tmp/squid-install/etc /etc/
+COPY --from=builder /tmp/squid-install/var/log /var/log/
+COPY --from=builder /tmp/squid-install/var/cache /var/cache/
 
 # Create necessary directories and set permissions
 RUN mkdir -p /var/cache/squid /var/log/squid /etc/squid \
