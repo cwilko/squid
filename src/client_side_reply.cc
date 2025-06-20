@@ -2475,52 +2475,65 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     if (result.flags.error) {
         debugs(88, 3, "Range forward error detected");
         cleanupRangeForwarding();
-        // TODO: Could fall back to cache or send error to client
+        // Fall back to original cache entry
         return;
-    }
-    
-    // Forward HTTP response data to client through normal pipeline
-    if (result.length > 0) {
-        debugs(88, 5, "Forwarding " << result.length << " bytes of range data to client");
-        // Use NULL for reply since this is just forwarding data, not setting up new headers
-        clientStreamCallback((clientStreamNode*)http->client_stream.head->data,
-                             http, NULL, result);
     }
     
     if (result.length == 0) {
         // End of range data - clean up
         debugs(88, 3, "Range forward complete, cleaning up");
         cleanupRangeForwarding();
-    } else if (result.length > 0) {
-        // Continue reading more data
-        StoreIOBuffer nextBuf;
-        nextBuf.data = next()->readBuffer.data;
-        nextBuf.length = next()->readBuffer.length;
-        nextBuf.offset = result.offset + result.length;
-        
-        storeClientCopy(tempSc, tempRangeEntry, nextBuf,
-                        HandleRangeForwardData, this);
+        return;
     }
+    
+    // Key insight: Instead of calling clientStreamCallback (which bypasses the stream 
+    // architecture), we switch the client to read from the temporary store entry.
+    // This allows the normal sendMoreData() flow to serve the forwarded range data.
+    
+    debugs(88, 3, "Range forwarding received " << result.length << " bytes - switching to temporary store entry");
+    
+    // Switch the clientReplyContext to use the temporary store entry
+    // First, clean up the current store client registration
+    if (sc) {
+        storeUnregister(sc, http->storeEntry(), this);
+        sc = nullptr;
+    }
+    
+    // Replace the original store entry with the temporary one  
+    StoreEntry *originalEntry = http->storeEntry();
+    http->storeEntry(tempRangeEntry);
+    
+    // Set up store client for the temporary entry
+    sc = storeClientListAdd(tempRangeEntry, this);
+    
+    // Clear range forwarding state since we're now serving from the temp entry
+    tempSc = nullptr; // Transfer ownership to sc
+    tempRangeEntry = nullptr; // Transfer ownership to http->storeEntry()
+    
+    // Trigger normal sendMoreData flow which will now read from the temporary entry
+    clientStreamNode *ourNode = (clientStreamNode *)http->client_stream.tail->prev->data;
+    clientGetMoreData(ourNode, http);
 }
 
 /// Clean up range forwarding resources
 void
 clientReplyContext::cleanupRangeForwarding()
 {
-    // Unregister store client
+    // Unregister store client only if we haven't transferred ownership
     if (tempSc) {
         storeUnregister(tempSc, tempRangeEntry, this);
         tempSc = nullptr;
     }
     
-    // Unlock and clean up temporary entry
+    // Unlock and clean up temporary entry only if we haven't transferred ownership
     if (tempRangeEntry) {
         tempRangeEntry->unlock("rangeForward");
         tempRangeEntry = nullptr;
     }
     
-    // Original cache entry and store client remain intact
-    // Future requests will find the original cache entry
+    // Note: If handleRangeForwardData() successfully switched store entries,
+    // tempSc and tempRangeEntry will already be nullptr and ownership 
+    // transferred to sc and http->storeEntry()
 }
 
 ErrorState *
