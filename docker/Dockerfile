@@ -111,8 +111,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Create proxy user and group
-RUN groupadd -r proxy && useradd -r -g proxy proxy
+# Create proxy user and group (if they don't exist)
+RUN if ! getent group proxy >/dev/null; then groupadd -r proxy; fi && \
+    if ! getent passwd proxy >/dev/null; then useradd -r -g proxy proxy; fi
 
 # Copy built squid from builder stage
 COPY --from=builder /tmp/squid-install /
