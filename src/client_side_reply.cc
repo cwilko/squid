@@ -2511,11 +2511,11 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     
     // Trigger sendMoreData directly since we've already switched store entries
     // clientGetMoreData() would look up the original cache key, so we bypass it
-    StoreIOBuffer tempBuffer;
-    tempBuffer.offset = 0;
-    tempBuffer.length = 0;
-    tempBuffer.data = nullptr;
-    sendMoreData(tempBuffer);
+    StoreIOBuffer switchBuffer;
+    switchBuffer.offset = 0;
+    switchBuffer.length = 0;
+    switchBuffer.data = nullptr;
+    sendMoreData(switchBuffer);
 }
 
 /// Clean up range forwarding resources
