@@ -123,7 +123,7 @@ RUN mkdir -p /var/cache/squid /var/log/squid /etc/squid \
     && chmod 755 /var/cache/squid /var/log/squid
 
 # Copy entrypoint script
-COPY docker-entrypoint.sh /usr/local/bin/
+COPY docker/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Create minimal squid.conf if none exists
