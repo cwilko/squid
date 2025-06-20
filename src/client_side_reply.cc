@@ -2509,13 +2509,10 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     tempSc = nullptr; // Transfer ownership to sc
     tempRangeEntry = nullptr; // Transfer ownership to http->storeEntry()
     
-    // Trigger sendMoreData directly since we've already switched store entries
-    // clientGetMoreData() would look up the original cache key, so we bypass it
-    StoreIOBuffer switchBuffer;
-    switchBuffer.offset = 0;
-    switchBuffer.length = 0;
-    switchBuffer.data = nullptr;
-    sendMoreData(switchBuffer);
+    // Trigger a read from the temporary store entry using the normal Squid pattern
+    // This is how Squid normally reads data from store entries
+    StoreIOBuffer localTempBuffer(next()->readBuffer.length, 0, next()->readBuffer.data);
+    storeClientCopy(sc, http->storeEntry(), localTempBuffer, SendMoreData, this);
 }
 
 /// Clean up range forwarding resources
