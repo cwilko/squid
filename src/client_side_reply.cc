@@ -2509,8 +2509,13 @@ clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
     tempSc = nullptr; // Transfer ownership to sc
     tempRangeEntry = nullptr; // Transfer ownership to http->storeEntry()
     
-    // Trigger normal sendMoreData flow which will now read from the temporary entry
-    clientGetMoreData(ourNode, http);
+    // Trigger sendMoreData directly since we've already switched store entries
+    // clientGetMoreData() would look up the original cache key, so we bypass it
+    StoreIOBuffer tempBuffer;
+    tempBuffer.offset = 0;
+    tempBuffer.length = 0;
+    tempBuffer.data = nullptr;
+    sendMoreData(tempBuffer);
 }
 
 /// Clean up range forwarding resources
