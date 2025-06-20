@@ -1,0 +1,84 @@
+# Docker ignore file for enhanced squid build
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Documentation (except container docs)
+*.md
+!README.md
+doc/
+docs/
+
+# Build artifacts (will be built in container)
+*.o
+*.lo
+*.la
+*.so
+*.so.*
+*.a
+.libs/
+.deps/
+autom4te.cache/
+config.log
+config.status
+config.cache
+configure
+Makefile
+Makefile.in
+libtool
+
+# Test and development files
+test-suite/
+tests/
+*_test
+*_test.c
+*_test.cc
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.#*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+cache.log*
+access.log*
+
+# Cache directories
+/var/cache/squid/
+/var/log/squid/
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Temporary files
+*.tmp
+*.temp
+
+# Package files
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.zip
+*.deb
+*.rpm
+
+# Local configuration (use mounted configs instead)
+squid.conf.local
+squid.conf.test
