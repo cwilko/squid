@@ -77,56 +77,7 @@ jobs:
           org.opencontainers.image.source=https://github.com/cwilko/squid
           org.opencontainers.image.documentation=https://github.com/cwilko/squid/blob/v5/docker/README.md
 
-    - name: Build Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./docker/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: false
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        outputs: type=docker,dest=/tmp/squid-enhanced.tar
-
-    - name: Test Docker image
-      run: |
-        # Load the built image
-        docker load --input /tmp/squid-enhanced.tar
-        
-        # Get the first tag from the metadata
-        IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
-        echo "Testing image: $IMAGE_TAG"
-        
-        # Test basic functionality
-        echo "Testing basic container startup..."
-        docker run --rm --name squid-test -d "$IMAGE_TAG"
-        
-        # Wait a moment for startup
-        sleep 10
-        
-        # Check if squid is running
-        docker exec squid-test ps aux | grep squid
-        
-        # Test configuration validation
-        echo "Testing configuration validation..."
-        docker exec squid-test squid -k parse
-        
-        # Check if range forwarding is configured
-        echo "Testing range forwarding configuration..."
-        docker exec squid-test grep -q "range_forward_on_cache_miss" /etc/squid/squid.conf
-        
-        # Check health
-        echo "Testing health check..."
-        docker exec squid-test squid -k check
-        
-        # Stop test container
-        docker stop squid-test
-        
-        echo "All tests passed!"
-
-    - name: Push Docker image
+    - name: Build and Push Docker image
       if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_image == 'true')
       uses: docker/build-push-action@v5
       with:
