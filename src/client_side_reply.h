@@ -149,6 +149,7 @@ private:
 
     /// Range request forwarding state tracking
     bool rangeForwardingChecked;
+    bool hasRangeSwitched;
 
     /// Temporary store entry for range forwarding (non-cached)
     StoreEntry *tempRangeEntry;
