@@ -2380,6 +2380,26 @@ clientReplyContext::shouldForwardRangeToUpstream() const
     if (entry->store_status != STORE_PENDING)
         return false;
 
+    const MemObject *mem = entry->mem_obj;
+    
+    // Check if there's already another client downloading this entry
+    // Only forward ranges when there's evidence of an existing download
+    bool hasMultipleClients = mem->nclients > 1;
+    bool hasActiveSwapOut = (mem->swapout.sio != NULL);
+    
+    // Check if not aborted
+    bool isActiveEntry = !EBIT_TEST(entry->flags, ENTRY_ABORTED) &&
+                        !EBIT_TEST(entry->flags, RELEASE_REQUEST);
+    
+    bool hasExistingDownload = isActiveEntry && (hasMultipleClients || hasActiveSwapOut);
+    
+    if (!hasExistingDownload) {
+        debugs(88, 5, "No existing download detected - letting normal cache miss proceed. " <<
+                      "clients=" << mem->nclients << 
+                      " swapout=" << (mem->swapout.sio ? "active" : "none"));
+        return false;
+    }
+
     // Check if the range starts beyond currently downloaded data
     int64_t rangeStart = http->request->range->firstOffset();
     if (rangeStart < 0) {
@@ -2387,12 +2407,13 @@ clientReplyContext::shouldForwardRangeToUpstream() const
         return false;
     }
 
-    int64_t availableBytes = entry->mem_obj->endOffset();
-    bool shouldForward = (rangeStart > availableBytes);
+    int64_t currentSize = mem->endOffset();
+    bool shouldForward = (rangeStart > currentSize);
 
     debugs(88, 3, "Range request analysis: start=" << rangeStart << 
-                  " available=" << availableBytes << 
-                  " shouldForward=" << shouldForward);
+                  " available=" << currentSize << 
+                  " shouldForward=" << shouldForward <<
+                  " (existing download detected)");
 
     return shouldForward;
 }
