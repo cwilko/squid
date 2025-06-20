@@ -2397,9 +2397,6 @@ clientReplyContext::shouldForwardRangeToUpstream() const
     return shouldForward;
 }
 
-/// Static callback for range forwarding data
-static void HandleRangeForwardData(void *data, StoreIOBuffer result);
-
 /// Forward a range request to upstream instead of serving from cache
 void
 clientReplyContext::forwardRangeRequestToUpstream()
@@ -2465,24 +2462,6 @@ clientReplyContext::wasServedFromCache() const
 {
     // Check if hierarchy indicates local cache serving (no upstream contact)
     return (http->request->hier.code == HIER_NONE);
-}
-
-/// Static callback for range forwarding data
-static void
-HandleRangeForwardData(void *data, StoreIOBuffer result)
-{
-    clientReplyContext *context = static_cast<clientReplyContext*>(data);
-    context->handleRangeForwardData(result);
-}
-
-/// Handle range forwarding response data (now unused - kept for compatibility)
-void
-clientReplyContext::handleRangeForwardData(StoreIOBuffer result)
-{
-    // This function is no longer used since we switch store entries immediately
-    // in forwardRangeRequestToUpstream(). Keeping it for now to avoid breaking
-    // any remaining references, but it should not be called.
-    debugs(88, 3, "handleRangeForwardData called but should not be - switching is now done immediately");
 }
 
 /// Clean up range forwarding resources

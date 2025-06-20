@@ -161,8 +161,6 @@ private:
     void cleanupRangeForwarding();
 
 public:
-    void handleRangeForwardData(StoreIOBuffer result);
-    
     /// Check if request was served from cache (even if store status is PENDING)
     bool wasServedFromCache() const;
 
