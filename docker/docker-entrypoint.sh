@@ -9,6 +9,15 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# Function to clean up stale PID files
+cleanup_pid() {
+    local pid_file="/var/run/squid.pid"
+    if [ -f "$pid_file" ]; then
+        log "Removing stale PID file: $pid_file"
+        rm -f "$pid_file"
+    fi
+}
+
 # Function to initialize squid cache
 init_cache() {
     if [ ! -d "$SQUID_CACHE_DIR/00" ]; then
@@ -49,6 +58,31 @@ validate_config() {
     log "Configuration is valid"
 }
 
+# Function to fix mounted volume permissions
+fix_mounted_volume_permissions() {
+    # Fix permissions for commonly mounted directories
+    local potential_dirs=("/var/cache/squid" "/var/spool/squid" "$SQUID_LOG_DIR" "/usr/local/scripts")
+    
+    for dir in "${potential_dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            log "Fixing permissions for mounted directory: $dir"
+            chown -R proxy:proxy "$dir"
+            chmod 755 "$dir"
+            # Make scripts executable
+            find "$dir" -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
+        fi
+    done
+    
+    # Always fix /etc/squid permissions (especially important for mounted configs)
+    local config_dir="$(dirname "$SQUID_CONFIG_FILE")"
+    if [ -d "$config_dir" ]; then
+        log "Fixing permissions for config directory: $config_dir"
+        chown -R proxy:proxy "$config_dir"
+        find "$config_dir" -type f -exec chmod 644 {} \;
+        find "$config_dir" -type d -exec chmod 755 {} \;
+    fi
+}
+
 # Function to copy required config files if missing (for mounted volumes)
 copy_required_configs() {
     local config_dir="$(dirname "$SQUID_CONFIG_FILE")"
@@ -65,6 +99,9 @@ copy_required_configs() {
         cat > "$SQUID_CONFIG_FILE" << 'EOF'
 # Enhanced Squid with Range Forwarding
 http_port 3128
+
+# Disable ICMP pinger (not needed in container environment)
+pinger_enable off
 
 # ACLs
 acl localnet src 10.0.0.0/8
@@ -95,10 +132,47 @@ EOF
     fi
 }
 
+# Function to initialize SSL certificate database
+init_ssl_db() {
+    local ssl_db_dir="/var/lib/squid/ssl_db"
+    local ssl_helper="/usr/lib/squid/security_file_certgen"
+    
+    # Check if SSL helper exists and has proper permissions
+    if [ ! -f "$ssl_helper" ]; then
+        log "WARNING: SSL certificate helper not found at $ssl_helper"
+        return 0
+    fi
+    
+    # Ensure helper has proper permissions
+    chown root:proxy "$ssl_helper"
+    chmod 4755 "$ssl_helper"
+    
+    if [ ! -d "$ssl_db_dir" ]; then
+        log "Initializing SSL certificate database..."
+        mkdir -p /var/lib/squid
+        chown proxy:proxy /var/lib/squid
+        
+        # Initialize SSL database as proxy user
+        if sudo -u proxy "$ssl_helper" -c -s "$ssl_db_dir" -M 4MB; then
+            log "SSL database initialized successfully"
+            chown -R proxy:proxy /var/lib/squid
+        else
+            log "WARNING: Failed to initialize SSL database"
+        fi
+    else
+        log "SSL certificate database already exists"
+        # Ensure proper ownership
+        chown -R proxy:proxy "$ssl_db_dir"
+    fi
+}
+
 # Function to set proper permissions
 set_permissions() {
     # Ensure proxy user owns necessary directories
-    chown -R proxy:proxy "$SQUID_CACHE_DIR" "$SQUID_LOG_DIR"
+    chown -R proxy:proxy "$SQUID_CACHE_DIR" "$SQUID_LOG_DIR" /var/spool/squid /var/lib/squid
+    
+    # Ensure PID file location is writable
+    chown proxy:proxy /var/run
     
     # Ensure config files are readable
     if [ -f "$SQUID_CONFIG_FILE" ]; then
@@ -125,8 +199,14 @@ main() {
     # Copy required config files if missing (handles mounted volumes)
     copy_required_configs
     
+    # Fix mounted volume permissions (critical for volume mounts)
+    fix_mounted_volume_permissions
+    
     # Set proper permissions
     set_permissions
+    
+    # Initialize SSL database
+    init_ssl_db
     
     # Configure range forwarding
     configure_range_forwarding

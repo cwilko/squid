@@ -91,7 +91,7 @@ LABEL version="5.10-enhanced"
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies
+# Install runtime dependencies (including Python3 for external store_id scripts)
 RUN apt-get update && apt-get install -y \
     libssl3 \
     libcap2 \
@@ -109,6 +109,8 @@ RUN apt-get update && apt-get install -y \
     libecap3 \
     libsystemd0 \
     ca-certificates \
+    python3 \
+    python3-minimal \
     && rm -rf /var/lib/apt/lists/*
 
 # Create proxy user and group (if they don't exist)
@@ -126,10 +128,20 @@ COPY src/mime.conf.default /etc/squid/mime.conf
 RUN mkdir -p /usr/share/squid/conf-defaults
 COPY src/mime.conf.default /usr/share/squid/conf-defaults/mime.conf
 
-# Create necessary directories and set permissions
-RUN mkdir -p /var/cache/squid /var/log/squid /etc/squid \
-    && chown -R proxy:proxy /var/cache/squid /var/log/squid \
-    && chmod 755 /var/cache/squid /var/log/squid
+# Create necessary directories and set permissions (excluding ssl_db which gets created by security_file_certgen)
+RUN mkdir -p /var/cache/squid /var/log/squid /var/spool/squid /var/run /etc/squid /var/lib/squid \
+    && chown -R proxy:proxy /var/cache/squid /var/log/squid /var/spool/squid /var/run /var/lib/squid /etc/squid \
+    && chmod 755 /var/cache/squid /var/log/squid /var/spool/squid /var/run
+
+# Fix helper binary permissions for ICMP and SSL functionality
+RUN if [ -f /usr/lib/squid/pinger ]; then \
+    chown root:proxy /usr/lib/squid/pinger && \
+    chmod 4755 /usr/lib/squid/pinger; \
+fi && \
+if [ -f /usr/lib/squid/security_file_certgen ]; then \
+    chown root:proxy /usr/lib/squid/security_file_certgen && \
+    chmod 4755 /usr/lib/squid/security_file_certgen; \
+fi
 
 # Copy entrypoint script
 COPY docker/docker-entrypoint.sh /usr/local/bin/
