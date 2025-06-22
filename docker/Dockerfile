@@ -121,6 +121,11 @@ COPY --from=builder /tmp/squid-install/etc /etc/
 COPY --from=builder /tmp/squid-install/var/log /var/log/
 COPY --from=builder /tmp/squid-install/var/cache /var/cache/
 
+# Copy MIME configuration from source (both to /etc/squid and backup location)
+COPY src/mime.conf.default /etc/squid/mime.conf
+RUN mkdir -p /usr/share/squid/conf-defaults
+COPY src/mime.conf.default /usr/share/squid/conf-defaults/mime.conf
+
 # Create necessary directories and set permissions
 RUN mkdir -p /var/cache/squid /var/log/squid /etc/squid \
     && chown -R proxy:proxy /var/cache/squid /var/log/squid \

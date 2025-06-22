@@ -49,14 +49,69 @@ validate_config() {
     log "Configuration is valid"
 }
 
+# Function to copy required config files if missing (for mounted volumes)
+copy_required_configs() {
+    local config_dir="$(dirname "$SQUID_CONFIG_FILE")"
+    
+    # Copy mime.conf if it doesn't exist
+    if [ ! -f "$config_dir/mime.conf" ]; then
+        log "Copying missing mime.conf to mounted volume..."
+        cp /usr/share/squid/conf-defaults/mime.conf "$config_dir/mime.conf"
+    fi
+    
+    # Create default squid.conf if it doesn't exist
+    if [ ! -f "$SQUID_CONFIG_FILE" ]; then
+        log "Creating default squid.conf in mounted volume..."
+        cat > "$SQUID_CONFIG_FILE" << 'EOF'
+# Enhanced Squid with Range Forwarding
+http_port 3128
+
+# ACLs
+acl localnet src 10.0.0.0/8
+acl localnet src 172.16.0.0/12
+acl localnet src 192.168.0.0/16
+acl SSL_ports port 443
+acl Safe_ports port 80
+acl Safe_ports port 443
+acl CONNECT method CONNECT
+
+# Access rules
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+http_access allow localhost manager
+http_access deny manager
+http_access allow localnet
+http_access allow localhost
+http_access deny all
+
+# Enhanced Range Forwarding Feature
+range_forward_on_cache_miss on
+
+# Cache configuration
+cache_dir ufs /var/cache/squid 1000 16 256
+maximum_object_size 1 GB
+cache_mem 256 MB
+EOF
+    fi
+}
+
 # Function to set proper permissions
 set_permissions() {
     # Ensure proxy user owns necessary directories
     chown -R proxy:proxy "$SQUID_CACHE_DIR" "$SQUID_LOG_DIR"
     
-    # Ensure config file is readable
-    chown proxy:proxy "$SQUID_CONFIG_FILE"
-    chmod 644 "$SQUID_CONFIG_FILE"
+    # Ensure config files are readable
+    if [ -f "$SQUID_CONFIG_FILE" ]; then
+        chown proxy:proxy "$SQUID_CONFIG_FILE"
+        chmod 644 "$SQUID_CONFIG_FILE"
+    fi
+    
+    # Ensure mime.conf is readable
+    local config_dir="$(dirname "$SQUID_CONFIG_FILE")"
+    if [ -f "$config_dir/mime.conf" ]; then
+        chown proxy:proxy "$config_dir/mime.conf"
+        chmod 644 "$config_dir/mime.conf"
+    fi
 }
 
 # Main initialization
@@ -66,6 +121,9 @@ main() {
     log "Cache directory: $SQUID_CACHE_DIR"
     log "Log directory: $SQUID_LOG_DIR"
     log "Range forwarding: ${RANGE_FORWARD:-on}"
+    
+    # Copy required config files if missing (handles mounted volumes)
+    copy_required_configs
     
     # Set proper permissions
     set_permissions
