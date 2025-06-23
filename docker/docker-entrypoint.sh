@@ -153,11 +153,25 @@ init_ssl_db() {
         chown proxy:proxy /var/lib/squid
         
         # Initialize SSL database as proxy user
-        if sudo -u proxy "$ssl_helper" -c -s "$ssl_db_dir" -M 4MB; then
+        log "Running SSL database initialization command: sudo -u proxy $ssl_helper -c -s $ssl_db_dir -M 4MB"
+        log "Current /var/lib/squid permissions: $(ls -la /var/lib/ | grep squid || echo 'directory does not exist')"
+        log "SSL helper permissions: $(ls -la $ssl_helper)"
+        
+        if sudo -u proxy "$ssl_helper" -c -s "$ssl_db_dir" -M 4MB 2>&1 | while read line; do log "SSL init: $line"; done; then
             log "SSL database initialized successfully"
             chown -R proxy:proxy /var/lib/squid
+            log "SSL database final permissions: $(ls -la /var/lib/squid/)"
         else
-            log "WARNING: Failed to initialize SSL database"
+            log "ERROR: Failed to initialize SSL database"
+            log "Checking if sudo is available: $(which sudo || echo 'sudo not found')"
+            log "Checking if proxy user exists: $(id proxy 2>&1 || echo 'proxy user not found')"
+            log "Trying direct execution without sudo..."
+            if "$ssl_helper" -c -s "$ssl_db_dir" -M 4MB 2>&1 | while read line; do log "SSL direct: $line"; done; then
+                log "SSL database initialized successfully with direct execution"
+                chown -R proxy:proxy /var/lib/squid
+            else
+                log "ERROR: Both sudo and direct execution failed for SSL database initialization"
+            fi
         fi
     else
         log "SSL certificate database already exists"
@@ -171,8 +185,10 @@ set_permissions() {
     # Ensure proxy user owns necessary directories
     chown -R proxy:proxy "$SQUID_CACHE_DIR" "$SQUID_LOG_DIR" /var/spool/squid /var/lib/squid
     
-    # Ensure PID file location is writable
-    chown proxy:proxy /var/run
+    # Create and set permissions for PID file directory
+    mkdir -p /var/run/squid
+    chown proxy:proxy /var/run /var/run/squid
+    chmod 755 /var/run/squid
     
     # Ensure config files are readable
     if [ -f "$SQUID_CONFIG_FILE" ]; then
