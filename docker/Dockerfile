@@ -112,6 +112,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-minimal \
     sudo \
+    psmisc \
     && rm -rf /var/lib/apt/lists/*
 
 # Create proxy user and group (if they don't exist)

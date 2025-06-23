@@ -9,12 +9,44 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-# Function to clean up stale PID files
-cleanup_pid() {
+# Function to clean up stale PID files and processes
+cleanup_squid_processes() {
     local pid_file="/var/run/squid.pid"
+    
     if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        log "Found PID file with PID: $pid"
+        
+        # Check if the process is actually running
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Squid process $pid is still running, waiting for it to finish..."
+            # Wait up to 30 seconds for the process to finish
+            local count=0
+            while kill -0 "$pid" 2>/dev/null && [ $count -lt 30 ]; do
+                sleep 1
+                count=$((count + 1))
+            done
+            
+            if kill -0 "$pid" 2>/dev/null; then
+                log "Process $pid did not finish, terminating it..."
+                kill -TERM "$pid" 2>/dev/null || true
+                sleep 2
+                if kill -0 "$pid" 2>/dev/null; then
+                    log "Force killing process $pid..."
+                    kill -KILL "$pid" 2>/dev/null || true
+                fi
+            fi
+        fi
+        
         log "Removing stale PID file: $pid_file"
         rm -f "$pid_file"
+    fi
+    
+    # Also clean up any other squid processes that might be running
+    if pgrep -f "/usr/sbin/squid" >/dev/null; then
+        log "Found other squid processes, cleaning up..."
+        pkill -f "/usr/sbin/squid" || true
+        sleep 2
     fi
 }
 
@@ -23,6 +55,8 @@ init_cache() {
     if [ ! -d "$SQUID_CACHE_DIR/00" ]; then
         log "Initializing Squid cache directories..."
         /usr/sbin/squid -z -f "$SQUID_CONFIG_FILE"
+        log "Cache initialization completed, cleaning up any processes..."
+        cleanup_squid_processes
     else
         log "Cache directories already exist"
     fi
@@ -232,6 +266,10 @@ main() {
     
     # Initialize cache if needed
     init_cache
+    
+    # Final cleanup before starting main Squid process
+    log "Performing final cleanup before starting Squid..."
+    cleanup_squid_processes
     
     log "Initialization complete. Starting Squid..."
 }
