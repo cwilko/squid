@@ -1,1 +1,3 @@
 config
+CLAUDE.md
+docker/*.py
