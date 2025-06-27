@@ -214,6 +214,15 @@ init_ssl_db() {
     fi
 }
 
+# Function to start metrics API
+start_metrics_api() {
+    log "Starting Squid Metrics API..."
+    nohup python3 /usr/local/bin/squid_metrics_api.py > /var/log/squid/metrics_api.log 2>&1 &
+    local api_pid=$!
+    echo $api_pid > /var/run/squid_metrics_api.pid
+    log "Metrics API started with PID: $api_pid"
+}
+
 # Function to set proper permissions
 set_permissions() {
     # Ensure proxy user owns necessary directories
@@ -266,6 +275,9 @@ main() {
     
     # Initialize cache if needed
     init_cache
+    
+    # Start metrics API
+    start_metrics_api
     
     # Final cleanup before starting main Squid process
     log "Performing final cleanup before starting Squid..."

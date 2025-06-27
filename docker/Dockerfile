@@ -111,10 +111,14 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     python3 \
     python3-minimal \
+    python3-pip \
     curl \
     sudo \
     psmisc \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies for metrics API
+RUN pip3 install flask
 
 # Create proxy user and group (if they don't exist)
 RUN if ! getent group proxy >/dev/null; then groupadd -r proxy; fi && \
@@ -146,9 +150,10 @@ if [ -f /usr/lib/squid/security_file_certgen ]; then \
     chmod 4755 /usr/lib/squid/security_file_certgen; \
 fi
 
-# Copy entrypoint script
+# Copy entrypoint script and metrics API
 COPY docker/docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY docker/squid_metrics_api.py /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/squid_metrics_api.py
 
 # Create minimal squid.conf if none exists
 RUN if [ ! -f /etc/squid/squid.conf ]; then \
@@ -178,8 +183,8 @@ RUN if [ ! -f /etc/squid/squid.conf ]; then \
     chown proxy:proxy /etc/squid/squid.conf; \
 fi
 
-# Expose default squid port
-EXPOSE 3128
+# Expose default squid port and metrics API port
+EXPOSE 3128 8080
 
 # Environment variables for configuration
 ENV SQUID_CONFIG_FILE=/etc/squid/squid.conf
