@@ -47,18 +47,6 @@ In your GitHub repository, add these secrets:
 - `v1.0`, `v1.0.1` etc. (for version tags)
 - Branch-specific tags
 
-### `docker-security-scan.yml` - Security Scanning
-
-**Triggers:**
-- Push to main branches
-- Weekly scheduled scans
-- Manual trigger
-
-**Features:**
-- Trivy vulnerability scanning
-- Docker Scout CVE detection
-- Security configuration testing
-- Results uploaded to GitHub Security tab
 
 ## 📦 Usage Examples
 
@@ -144,11 +132,6 @@ platforms: linux/amd64,linux/arm64,linux/arm/v7
 - Check **Tags** tab for available images
 - View **Activity** for pull statistics
 
-### Security Scans
-
-- Go to **Security** tab in GitHub repo
-- View **Code scanning alerts** for vulnerabilities
-- Check **Dependabot alerts** for dependency issues
 
 ## 🛠 Troubleshooting
 
@@ -167,10 +150,6 @@ platforms: linux/amd64,linux/arm64,linux/arm/v7
 - Layer caching reduces subsequent build times
 - Consider using self-hosted runners for faster builds
 
-**Security Scan Failures**
-- Review vulnerability reports in Security tab
-- Update base image versions in Dockerfile
-- Consider using distroless or alpine base images
 
 ### Debugging Builds
 
