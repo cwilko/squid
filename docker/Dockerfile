@@ -118,7 +118,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for metrics API
-RUN pip3 install flask gunicorn
+RUN pip3 install flask requests
 
 # Create proxy user and group (if they don't exist)
 RUN if ! getent group proxy >/dev/null; then groupadd -r proxy; fi && \

@@ -11,6 +11,7 @@ import logging
 import re
 import os
 import time
+import requests
 from flask import Flask, jsonify
 from datetime import datetime
 
@@ -34,14 +35,17 @@ file_size_cache = {}
 # Cache for configured cache size from squid.conf
 configured_cache_size_mb = None
 
-def run_command(command):
+def run_command(command, log_errors=True):
     """Execute a shell command and return the output"""
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             return result.stdout.strip()
         else:
-            logger.error(f"Command failed: {command}, Error: {result.stderr}")
+            if log_errors:
+                logger.error(f"Command failed: {command}, Error: {result.stderr}")
+            else:
+                logger.debug(f"Command returned no results: {command}")
             return None
     except subprocess.TimeoutExpired:
         logger.error(f"Command timed out: {command}")
@@ -58,32 +62,41 @@ def get_file_size(url):
         return file_size_cache[url]
     
     try:
-        # Use curl HEAD request bypassing proxy and ignoring SSL cert issues
-        command = f"curl --head --noproxy '*' -k --timeout 30 '{url}'"
-        result = run_command(command)
+        # Use Python requests for HEAD request (no proxy, ignore SSL issues)
+        response = requests.head(
+            url,
+            timeout=30,
+            verify=False,  # Ignore SSL certificate issues
+            allow_redirects=True,
+            headers={'User-Agent': 'Squid-Metrics-API/1.0'}
+        )
         
-        if result:
-            # Parse Content-Length header
-            for line in result.split('\n'):
-                if line.lower().startswith('content-length:'):
-                    content_length = line.split(':')[1].strip()
-                    try:
-                        size_bytes = int(content_length)
-                        size_mb = round(size_bytes / (1024 * 1024), 2)
-                        
-                        # Cache the result
-                        file_size_cache[url] = size_mb
-                        logger.info(f"File size cached for URL: {url} = {size_mb} MB")
-                        return size_mb
-                    except ValueError:
-                        logger.error(f"Invalid Content-Length value: {content_length}")
-                        break
+        # Check if request was successful
+        response.raise_for_status()
         
-        logger.warning(f"Could not get file size for URL: {url}")
+        # Get Content-Length header
+        content_length = response.headers.get('content-length')
+        if content_length:
+            try:
+                size_bytes = int(content_length)
+                size_mb = round(size_bytes / (1024 * 1024), 2)
+                
+                # Cache the result
+                file_size_cache[url] = size_mb
+                logger.info(f"File size cached for URL: {url} = {size_mb} MB")
+                return size_mb
+            except ValueError:
+                logger.error(f"Invalid Content-Length value: {content_length}")
+        else:
+            logger.warning(f"No Content-Length header found for URL: {url}")
+        
         return None
         
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to get file size for URL {url}: {e}")
+        return None
     except Exception as e:
-        logger.error(f"Error getting file size for URL {url}: {e}")
+        logger.error(f"Unexpected error getting file size for URL {url}: {e}")
         return None
 
 def get_configured_cache_size():
@@ -224,7 +237,8 @@ def get_active_prefetch_info():
             if pid:
                 # Check if process is still running
                 check_cmd = f"kill -0 {pid} 2>/dev/null && echo 'running'"
-                if run_command(check_cmd) == 'running':
+                if run_command(check_cmd, log_errors=False) == 'running':
+                    logger.debug(f"Found active process with PID: {pid}")
                     # Get the command line of the process
                     ps_cmd = f"ps -p {pid} -o args --no-headers"
                     cmd_line = run_command(ps_cmd)
@@ -270,9 +284,10 @@ def get_active_prefetch_info():
     
     # Fallback: check for any active curl processes with proxy flag
     curl_cmd = "ps -ef | grep 'curl.*-x.*real-debrid' | grep -v grep"
-    curl_output = run_command(curl_cmd)
+    curl_output = run_command(curl_cmd, log_errors=False)
     
     if curl_output:
+        logger.debug("Found active curl processes via ps command")
         for line in curl_output.split('\n'):
             if 'curl' in line and '-x' in line:
                 # Extract URL from curl command
@@ -302,6 +317,7 @@ def get_active_prefetch_info():
                         
                     return result
     
+    logger.debug("No active pre-fetch processes found")
     return None
 
 def get_recent_prefetch_info():
@@ -465,8 +481,5 @@ def list_metrics():
         'timestamp': datetime.utcnow().isoformat() + 'Z'
     })
 
-# Application entry point for Gunicorn
-# Use: gunicorn squid_metrics_api:app
 if __name__ == '__main__':
-    # Fallback for direct execution (development only)
-    app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=8080, debug=False, processes=2, threaded=False)

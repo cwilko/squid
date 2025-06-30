@@ -216,12 +216,11 @@ init_ssl_db() {
 
 # Function to start metrics API
 start_metrics_api() {
-    log "Starting Squid Metrics API with Gunicorn..."
-    cd /usr/local/bin
-    nohup gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 120 --access-logfile /var/log/squid/metrics_api_access.log --error-logfile /var/log/squid/metrics_api_error.log squid_metrics_api:app > /var/log/squid/metrics_api.log 2>&1 &
+    log "Starting Squid Metrics API..."
+    nohup python3 /usr/local/bin/squid_metrics_api.py > /var/log/squid/metrics_api.log 2>&1 &
     local api_pid=$!
     echo $api_pid > /var/run/squid_metrics_api.pid
-    log "Metrics API started with Gunicorn PID: $api_pid"
+    log "Metrics API started with PID: $api_pid"
 }
 
 # Function to set proper permissions
