@@ -14,6 +14,10 @@ import time
 import requests
 from flask import Flask, jsonify
 from datetime import datetime
+import urllib3
+
+# Disable SSL warnings since we intentionally bypass SSL verification
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
@@ -139,59 +143,124 @@ def get_configured_cache_size():
         logger.error(f"Error reading squid.conf: {e}")
         return None
 
-def parse_curl_completion_log(log_file_path):
-    """Parse curl completion log to extract final statistics"""
-    try:
-        with open(log_file_path, 'r') as f:
-            content = f.read()
-            
-        # Look for the FINAL line from --write-out
-        # Format: FINAL: HTTP 200 | 1073741824 bytes | 180.5s | 5962370 bytes/s avg
-        for line in content.split('\n'):
-            if line.startswith('FINAL:'):
-                parts = line.split('|')
-                if len(parts) >= 4:
-                    try:
-                        # Extract bytes downloaded
-                        bytes_part = parts[1].strip().split()[0]
-                        bytes_downloaded = int(bytes_part)
-                        
-                        # Extract duration
-                        duration_part = parts[2].strip().rstrip('s')
-                        duration_seconds = float(duration_part)
-                        
-                        # Extract speed and convert to Mbps
-                        speed_part = parts[3].strip().split()[0]
-                        speed_bytes_per_sec = int(speed_part)
-                        speed_mbps = round((speed_bytes_per_sec * 8) / (1024 * 1024), 2)
-                        
-                        return {
-                            'bytes_downloaded': bytes_downloaded,
-                            'duration_seconds': duration_seconds,
-                            'download_speed_mbps': speed_mbps
-                        }
-                    except (ValueError, IndexError):
-                        logger.error(f"Failed to parse FINAL line: {line}")
-                        continue
-        
-        logger.warning(f"No FINAL line found in log: {log_file_path}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error reading curl log {log_file_path}: {e}")
-        return None
 
-def find_most_recent_log_file():
-    """Find the most recent curl progress log file"""
+def get_download_progress_from_logs(pid):
+    """Try to get download progress and file size from active wget log file"""
     try:
         log_dir = '/var/log/squid'
         if not os.path.exists(log_dir):
             return None
             
-        # Find all curl_progress_*.log files
+        # Look for log file with matching PID
+        for filename in os.listdir(log_dir):
+            if filename.startswith('wget_progress_') and filename.endswith(f'_{pid}.log'):
+                log_path = os.path.join(log_dir, filename)
+                
+                with open(log_path, 'r') as f:
+                    content = f.read()
+                
+                result = {'file_size_mb': None, 'downloaded_mb': None, 'progress_percent': None}
+                
+                # Parse Content-Length from server response headers
+                content_length_match = re.search(r'Content-Length:\s*(\d+)', content, re.IGNORECASE)
+                if content_length_match:
+                    try:
+                        size_bytes = int(content_length_match.group(1))
+                        result['file_size_mb'] = round(size_bytes / (1024 * 1024), 2)
+                    except ValueError:
+                        pass
+                
+                # Parse current progress from wget dot output
+                # Format: "  32768K ........ ........ ........ ........ 65536K"
+                # Look for the last line with progress info
+                lines = content.split('\n')
+                last_progress_kb = 0
+                
+                for line in reversed(lines):
+                    # Look for lines with KB progress indicators
+                    kb_match = re.search(r'\s+(\d+)K\s+[.\s]+(\d+)K\s*$', line)
+                    if kb_match:
+                        try:
+                            last_progress_kb = int(kb_match.group(2))  # Use the end position
+                            break
+                        except ValueError:
+                            continue
+                
+                if last_progress_kb > 0:
+                    result['downloaded_mb'] = round(last_progress_kb / 1024, 2)
+                    
+                    # Calculate progress percentage if we have file size
+                    if result['file_size_mb'] and result['file_size_mb'] > 0:
+                        result['progress_percent'] = round((result['downloaded_mb'] / result['file_size_mb']) * 100, 1)
+                
+                return result
+                
+        return None
+        
+    except Exception as e:
+        logger.debug(f"Error reading wget log for PID {pid}: {e}")
+        return None
+
+def get_file_size_from_logs(pid):
+    """Try to get file size from active wget log file (backward compatibility)"""
+    progress_info = get_download_progress_from_logs(pid)
+    return progress_info['file_size_mb'] if progress_info else None
+
+def parse_wget_log(log_file_path):
+    """Parse wget log to extract completion status and file size"""
+    try:
+        with open(log_file_path, 'r') as f:
+            content = f.read()
+            
+        result = {'status': 'unknown', 'file_size_mb': None}
+        
+        # Parse Content-Length from server response headers
+        content_length_match = re.search(r'Content-Length:\s*(\d+)', content, re.IGNORECASE)
+        if content_length_match:
+            try:
+                size_bytes = int(content_length_match.group(1))
+                result['file_size_mb'] = round(size_bytes / (1024 * 1024), 2)
+            except ValueError:
+                pass
+        
+        # Check for wget success indicators
+        # wget typically shows "saved" when successful
+        if 'saved [' in content.lower() or 'downloaded:' in content.lower():
+            result['status'] = 'completed'
+            return result
+        
+        # Check for wget error indicators
+        error_indicators = [
+            'error', 'failed', 'unable to resolve',
+            'connection refused', 'timeout', 'not found'
+        ]
+        
+        content_lower = content.lower()
+        for indicator in error_indicators:
+            if indicator in content_lower:
+                result['status'] = 'failed'
+                return result
+        
+        # If log exists but no clear success/failure indicators, 
+        # it might still be running or incomplete
+        result['status'] = 'unknown'
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error reading wget log {log_file_path}: {e}")
+        return {'status': 'failed', 'file_size_mb': None}
+
+def find_most_recent_log_file():
+    """Find the most recent wget progress log file"""
+    try:
+        log_dir = '/var/log/squid'
+        if not os.path.exists(log_dir):
+            return None
+            
+        # Find all wget_progress_*.log files
         log_files = []
         for filename in os.listdir(log_dir):
-            if filename.startswith('curl_progress_') and filename.endswith('.log'):
+            if filename.startswith('wget_progress_') and filename.endswith('.log'):
                 filepath = os.path.join(log_dir, filename)
                 try:
                     mtime = os.path.getmtime(filepath)
@@ -238,13 +307,71 @@ def get_active_prefetch_info():
                 # Check if process is still running
                 check_cmd = f"kill -0 {pid} 2>/dev/null && echo 'running'"
                 if run_command(check_cmd, log_errors=False) == 'running':
+                    # Check if process is actually running (not zombie/defunct)
+                    status_cmd = f"ps -p {pid} -o stat --no-headers"
+                    status = run_command(status_cmd, log_errors=False)
+                    
+                    if status and 'Z' in status:
+                        logger.debug(f"Process {pid} is zombie/defunct, treating as failed")
+                        # Get process info from ps to extract details for failed status
+                        ps_cmd = f"ps -p {pid} -o args --no-headers"
+                        cmd_line = run_command(ps_cmd, log_errors=False)
+                        
+                        if cmd_line and 'wget' in cmd_line:
+                            # Extract URL and filename from zombie wget command
+                            url_match = re.search(r'https://[^\s]+', cmd_line)
+                            if url_match:
+                                url = url_match.group(0)
+                                
+                                # Extract filename from Real-Debrid URL pattern
+                                rd_match = re.search(r'https://\d+-\d+\.download\.real-debrid\.com/d/[^/]+/(.+)', url)
+                                if rd_match:
+                                    filename = rd_match.group(1)
+                                else:
+                                    filename = url.split('/')[-1]
+                                
+                                # Try to get progress info from wget log first, then fallback to HEAD request  
+                                progress_info = get_download_progress_from_logs(pid)
+                                if progress_info and progress_info['file_size_mb'] is not None:
+                                    file_size_mb = progress_info['file_size_mb']
+                                    downloaded_mb = progress_info['downloaded_mb'] 
+                                    progress_percent = progress_info['progress_percent']
+                                else:
+                                    file_size_mb = get_file_size(url)
+                                    downloaded_mb = None
+                                    progress_percent = None
+                                
+                                # Get start time from PID file creation time
+                                try:
+                                    pid_file_stat = os.stat(pid_file)
+                                    started_at = datetime.fromtimestamp(pid_file_stat.st_mtime).isoformat() + 'Z'
+                                except:
+                                    started_at = None
+                                
+                                result = {
+                                    'status': 'failed',
+                                    'filename': filename,
+                                    'url': url
+                                }
+                                
+                                if file_size_mb is not None:
+                                    result['file_size_mb'] = file_size_mb
+                                if downloaded_mb is not None:
+                                    result['downloaded_mb'] = downloaded_mb
+                                if progress_percent is not None:
+                                    result['progress_percent'] = progress_percent
+                                if started_at:
+                                    result['started_at'] = started_at
+                                    
+                                return result
+                    
                     logger.debug(f"Found active process with PID: {pid}")
                     # Get the command line of the process
                     ps_cmd = f"ps -p {pid} -o args --no-headers"
                     cmd_line = run_command(ps_cmd)
                     
-                    if cmd_line and 'curl' in cmd_line:
-                        # Extract URL from curl command
+                    if cmd_line and 'wget' in cmd_line:
+                        # Extract URL from wget command
                         url_match = re.search(r'https://[^\s]+', cmd_line)
                         if url_match:
                             url = url_match.group(0)
@@ -257,8 +384,16 @@ def get_active_prefetch_info():
                                 # Fallback: get filename from URL path
                                 filename = url.split('/')[-1]
                             
-                            # Get file size
-                            file_size_mb = get_file_size(url)
+                            # Try to get progress info from wget log first, then fallback to HEAD request
+                            progress_info = get_download_progress_from_logs(pid)
+                            if progress_info and progress_info['file_size_mb'] is not None:
+                                file_size_mb = progress_info['file_size_mb']
+                                downloaded_mb = progress_info['downloaded_mb'] 
+                                progress_percent = progress_info['progress_percent']
+                            else:
+                                file_size_mb = get_file_size(url)
+                                downloaded_mb = None
+                                progress_percent = None
                             
                             # Get start time from PID file creation time
                             try:
@@ -275,6 +410,10 @@ def get_active_prefetch_info():
                             
                             if file_size_mb is not None:
                                 result['file_size_mb'] = file_size_mb
+                            if downloaded_mb is not None:
+                                result['downloaded_mb'] = downloaded_mb
+                            if progress_percent is not None:
+                                result['progress_percent'] = progress_percent
                             if started_at:
                                 result['started_at'] = started_at
                                 
@@ -282,15 +421,15 @@ def get_active_prefetch_info():
         except Exception as e:
             logger.error(f"Error checking active pre-fetch: {e}")
     
-    # Fallback: check for any active curl processes with proxy flag
-    curl_cmd = "ps -ef | grep 'curl.*-x.*real-debrid' | grep -v grep"
-    curl_output = run_command(curl_cmd, log_errors=False)
+    # Fallback: check for any active wget processes with proxy flag (exclude zombies)
+    wget_cmd = "ps -ef | grep 'wget.*--proxy.*real-debrid' | grep -v grep | grep -v defunct"
+    wget_output = run_command(wget_cmd, log_errors=False)
     
-    if curl_output:
-        logger.debug("Found active curl processes via ps command")
-        for line in curl_output.split('\n'):
-            if 'curl' in line and '-x' in line:
-                # Extract URL from curl command
+    if wget_output:
+        logger.debug("Found active wget processes via ps command")
+        for line in wget_output.split('\n'):
+            if 'wget' in line and '--proxy' in line:
+                # Extract URL from wget command
                 url_match = re.search(r'https://[^\s]+', line)
                 if url_match:
                     url = url_match.group(0)
@@ -303,7 +442,7 @@ def get_active_prefetch_info():
                         # Fallback: get filename from URL path
                         filename = url.split('/')[-1]
                     
-                    # Get file size
+                    # Get file size (this case doesn't have PID, so just use HEAD request)
                     file_size_mb = get_file_size(url)
                     
                     result = {
@@ -335,7 +474,7 @@ def get_recent_prefetch_info():
             return None
         
         # Extract filename from log file name
-        # Format: curl_progress_YYYYMMDD_HHMMSS_PID.log
+        # Format: wget_progress_YYYYMMDD_HHMMSS_PID.log
         log_filename = os.path.basename(recent_log)
         
         # Try to get URL from lock file if it exists
@@ -354,33 +493,30 @@ def get_recent_prefetch_info():
             except:
                 pass
         
-        # Parse completion log for statistics
-        completion_stats = parse_curl_completion_log(recent_log)
+        # Parse wget log for completion status and file size
+        wget_result = parse_wget_log(recent_log)
         
-        if completion_stats:
+        if wget_result['status'] == 'completed':
             # Successfully completed
             result = {'status': 'completed'}
             
             if filename:
                 result['filename'] = filename
             
-            # Get file size if we have filename
-            if filename and url:
+            # Use file size from wget log if available, otherwise try HEAD request as fallback
+            if wget_result['file_size_mb'] is not None:
+                result['file_size_mb'] = wget_result['file_size_mb']
+            elif filename and url:
                 file_size_mb = get_file_size(url)
                 if file_size_mb is not None:
                     result['file_size_mb'] = file_size_mb
             
             # Add start time from log file creation
             try:
-                started_at = datetime.fromtimestamp(log_mtime - completion_stats['duration_seconds']).isoformat() + 'Z'
+                started_at = datetime.fromtimestamp(log_mtime).isoformat() + 'Z'
                 result['started_at'] = started_at
             except:
                 pass
-            
-            # Add completion stats
-            result['bytes_downloaded'] = completion_stats['bytes_downloaded']
-            result['download_speed_mbps'] = completion_stats['download_speed_mbps'] 
-            result['duration_seconds'] = completion_stats['duration_seconds']
             
             # Add completion time
             try:
@@ -391,11 +527,15 @@ def get_recent_prefetch_info():
                 
             return result
         else:
-            # Failed - log exists but no completion stats
-            result = {'status': 'failed'}
+            # Failed or unknown - log exists but wget didn't complete successfully
+            result = {'status': wget_result['status'] if wget_result['status'] in ['failed', 'unknown'] else 'failed'}
             
             if filename:
                 result['filename'] = filename
+            
+            # Include file size from wget log if available, even for failed downloads
+            if wget_result['file_size_mb'] is not None:
+                result['file_size_mb'] = wget_result['file_size_mb']
             
             # Add start time from log file creation
             try:

@@ -113,6 +113,7 @@ RUN apt-get update && apt-get install -y \
     python3-minimal \
     python3-pip \
     curl \
+    wget \
     sudo \
     psmisc \
     && rm -rf /var/lib/apt/lists/*
