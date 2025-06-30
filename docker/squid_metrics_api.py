@@ -17,7 +17,15 @@ from datetime import datetime
 app = Flask(__name__)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.environ.get('SQUID_API_LOG_LEVEL', 'INFO').upper()
+log_level_mapping = {
+    'DEBUG': logging.DEBUG,
+    'INFO': logging.INFO,
+    'WARNING': logging.WARNING,
+    'ERROR': logging.ERROR,
+    'CRITICAL': logging.CRITICAL
+}
+logging.basicConfig(level=log_level_mapping.get(LOG_LEVEL, logging.INFO))
 logger = logging.getLogger(__name__)
 
 # File size cache - stores URL -> file_size_mb mappings
@@ -457,5 +465,8 @@ def list_metrics():
         'timestamp': datetime.utcnow().isoformat() + 'Z'
     })
 
+# Application entry point for Gunicorn
+# Use: gunicorn squid_metrics_api:app
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    # Fallback for direct execution (development only)
+    app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)

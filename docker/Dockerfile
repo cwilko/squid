@@ -118,7 +118,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for metrics API
-RUN pip3 install flask
+RUN pip3 install flask gunicorn
 
 # Create proxy user and group (if they don't exist)
 RUN if ! getent group proxy >/dev/null; then groupadd -r proxy; fi && \
@@ -191,6 +191,7 @@ ENV SQUID_CONFIG_FILE=/etc/squid/squid.conf
 ENV SQUID_CACHE_DIR=/var/cache/squid
 ENV SQUID_LOG_DIR=/var/log/squid
 ENV RANGE_FORWARD=on
+ENV SQUID_API_LOG_LEVEL=INFO
 
 # Add health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
