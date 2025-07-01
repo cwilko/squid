@@ -50,6 +50,83 @@ cleanup_squid_processes() {
     fi
 }
 
+# Function to clean up old prefetch files
+cleanup_prefetch_files() {
+    local log_dir="$SQUID_LOG_DIR"
+    
+    if [ -d "$log_dir" ]; then
+        log "Cleaning up old prefetch files in $log_dir..."
+        
+        # Remove old prefetch state files
+        if [ -f "$log_dir/squid_prefetch.lock" ]; then
+            log "Removing stale prefetch lock file"
+            rm -f "$log_dir/squid_prefetch.lock"
+        fi
+        
+        if [ -f "$log_dir/squid_prefetch.pid" ]; then
+            log "Removing stale prefetch PID file"
+            rm -f "$log_dir/squid_prefetch.pid"
+        fi
+        
+        # Remove wget log files older than 24 hours
+        local old_logs=$(find "$log_dir" -name "wget_progress_*.log" -type f -mtime +1 2>/dev/null || true)
+        if [ -n "$old_logs" ]; then
+            log "Removing old wget log files (older than 24 hours)"
+            find "$log_dir" -name "wget_progress_*.log" -type f -mtime +1 -delete 2>/dev/null || true
+        fi
+        
+        # Remove empty wget log files (failed downloads that produced no output)
+        local empty_logs=$(find "$log_dir" -name "wget_progress_*.log" -type f -empty 2>/dev/null || true)
+        if [ -n "$empty_logs" ]; then
+            log "Removing empty wget log files"
+            find "$log_dir" -name "wget_progress_*.log" -type f -empty -delete 2>/dev/null || true
+        fi
+        
+        log "Prefetch file cleanup completed"
+    else
+        log "Log directory $log_dir does not exist, skipping prefetch cleanup"
+    fi
+}
+
+# Function to clean up squid cache contents
+cleanup_cache_contents() {
+    # Check environment variable (default is 'on' - cleanup enabled)
+    local cleanup_enabled="${SQUID_CLEANUP_CACHE_ON_START:-on}"
+    
+    if [ "$cleanup_enabled" = "off" ] || [ "$cleanup_enabled" = "false" ] || [ "$cleanup_enabled" = "no" ]; then
+        log "Cache cleanup disabled by SQUID_CLEANUP_CACHE_ON_START environment variable"
+        return 0
+    fi
+    
+    # Determine cache directory from SQUID_CACHE_DIR or default
+    local cache_dir="${SQUID_CACHE_DIR:-/var/spool/squid}"
+    
+    if [ -d "$cache_dir" ]; then
+        log "Wiping all contents in $cache_dir..."
+        
+        # Count items before removal
+        local content_count=$(find "$cache_dir" -mindepth 1 2>/dev/null | wc -l || echo "0")
+        
+        if [ "$content_count" -gt 0 ]; then
+            log "Removing $content_count items (files and directories) from cache"
+            # Remove everything inside the cache directory (files, folders, hidden files)
+            rm -rf "$cache_dir"/{*,.[^.]*,..?*} 2>/dev/null || {
+                log "WARNING: Some cache items could not be removed"
+            }
+            log "Cache wipe completed"
+        else
+            log "Cache directory is already empty"
+        fi
+        
+        # Ensure proper ownership and permissions of the empty cache directory
+        chown proxy:proxy "$cache_dir" 2>/dev/null || true
+        chmod 755 "$cache_dir" 2>/dev/null || true
+        
+    else
+        log "Cache directory $cache_dir does not exist yet, skipping cache cleanup"
+    fi
+}
+
 # Function to initialize squid cache
 init_cache() {
     if [ ! -d "$SQUID_CACHE_DIR/00" ]; then
@@ -264,6 +341,9 @@ main() {
     # Set proper permissions
     set_permissions
     
+    # Clean up old prefetch files
+    cleanup_prefetch_files
+    
     # Initialize SSL database
     init_ssl_db
     
@@ -272,6 +352,9 @@ main() {
     
     # Validate configuration
     validate_config
+    
+    # Clean up cache contents if enabled
+    cleanup_cache_contents
     
     # Initialize cache if needed
     init_cache

@@ -193,6 +193,7 @@ ENV SQUID_CACHE_DIR=/var/cache/squid
 ENV SQUID_LOG_DIR=/var/log/squid
 ENV RANGE_FORWARD=on
 ENV SQUID_API_LOG_LEVEL=INFO
+ENV SQUID_CLEANUP_CACHE_ON_START=on
 
 # Add health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \

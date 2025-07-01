@@ -151,54 +151,88 @@ def get_download_progress_from_logs(pid):
         if not os.path.exists(log_dir):
             return None
             
-        # Look for log file with matching PID
+        # Look for log file with matching PID or recent log file for this process
+        log_files = []
         for filename in os.listdir(log_dir):
-            if filename.startswith('wget_progress_') and filename.endswith(f'_{pid}.log'):
+            if filename.startswith('wget_progress_') and filename.endswith('.log'):
                 log_path = os.path.join(log_dir, filename)
+                try:
+                    mtime = os.path.getmtime(log_path)
+                    log_files.append((log_path, mtime, filename))
+                except OSError:
+                    continue
+        
+        # Sort by modification time, newest first
+        log_files.sort(key=lambda x: x[1], reverse=True)
+        
+        # Look for exact PID match first, then fall back to most recent
+        target_log = None
+        for log_path, mtime, filename in log_files:
+            if filename.endswith(f'_{pid}.log'):
+                target_log = log_path
+                break
+        
+        # If no exact match, use the most recent log file (within last 5 minutes)
+        if not target_log and log_files:
+            recent_log_path, recent_mtime, recent_filename = log_files[0]
+            current_time = time.time()
+            if current_time - recent_mtime < 300:  # 5 minutes
+                target_log = recent_log_path
+        
+        if target_log:
+            with open(target_log, 'r') as f:
+                content = f.read()
                 
-                with open(log_path, 'r') as f:
-                    content = f.read()
-                
-                result = {'file_size_mb': None, 'downloaded_mb': None, 'progress_percent': None}
-                
-                # Parse Content-Length from server response headers
-                content_length_match = re.search(r'Content-Length:\s*(\d+)', content, re.IGNORECASE)
-                if content_length_match:
-                    try:
-                        size_bytes = int(content_length_match.group(1))
-                        result['file_size_mb'] = round(size_bytes / (1024 * 1024), 2)
-                    except ValueError:
-                        pass
-                
-                # Parse current progress from wget dot output
-                # Format: "  32768K ........ ........ ........ ........ 65536K"
-                # Look for the last line with progress info
-                lines = content.split('\n')
-                last_progress_kb = 0
-                
-                for line in reversed(lines):
-                    # Look for lines with KB progress indicators
-                    kb_match = re.search(r'\s+(\d+)K\s+[.\s]+(\d+)K\s*$', line)
-                    if kb_match:
-                        try:
-                            last_progress_kb = int(kb_match.group(2))  # Use the end position
-                            break
-                        except ValueError:
-                            continue
-                
-                if last_progress_kb > 0:
-                    result['downloaded_mb'] = round(last_progress_kb / 1024, 2)
+            
+            result = {'file_size_mb': None, 'downloaded_mb': None, 'progress_percent': None}
+            
+            # Parse Content-Length from server response headers
+            content_length_match = re.search(r'Content-Length:\s*(\d+)', content, re.IGNORECASE)
+            if content_length_match:
+                try:
+                    size_bytes = int(content_length_match.group(1))
+                    result['file_size_mb'] = round(size_bytes / (1024 * 1024), 2)
+                except ValueError:
+                    pass
+            
+            # Parse current progress from wget dot output
+            # Format examples:
+            # "     0K ........ ........ ........ ........ 32768K"
+            # " 32768K ........ ........ ........ ........ 65536K"
+            # Look for the last line with progress info
+            lines = content.split('\n')
+            last_progress_kb = 0
+            
+            
+            for line in reversed(lines):
+                line = line.strip()
+                if not line:
+                    continue
                     
-                    # Calculate progress percentage if we have file size
-                    if result['file_size_mb'] and result['file_size_mb'] > 0:
-                        result['progress_percent'] = round((result['downloaded_mb'] / result['file_size_mb']) * 100, 1)
+                # Match the actual wget progress format:
+                # "3833856K ........ ........ ........ ........ 18% 38.1M 11m34s"
+                kb_match = re.search(r'^(\d+)K\s+[.\s]+', line)
+                if kb_match:
+                    try:
+                        last_progress_kb = int(kb_match.group(1))
+                        break
+                    except ValueError:
+                        continue
+            
+            
+            if last_progress_kb > 0:
+                result['downloaded_mb'] = round(last_progress_kb / 1024, 2)
                 
-                return result
-                
+                # Calculate progress percentage if we have file size
+                if result['file_size_mb'] and result['file_size_mb'] > 0:
+                    result['progress_percent'] = round((result['downloaded_mb'] / result['file_size_mb']) * 100, 1)
+            
+            return result
+        
         return None
         
     except Exception as e:
-        logger.debug(f"Error reading wget log for PID {pid}: {e}")
+        logger.error(f"Error reading wget log for PID {pid}: {e}")
         return None
 
 def get_file_size_from_logs(pid):
@@ -365,7 +399,6 @@ def get_active_prefetch_info():
                                     
                                 return result
                     
-                    logger.debug(f"Found active process with PID: {pid}")
                     # Get the command line of the process
                     ps_cmd = f"ps -p {pid} -o args --no-headers"
                     cmd_line = run_command(ps_cmd)
@@ -426,7 +459,6 @@ def get_active_prefetch_info():
     wget_output = run_command(wget_cmd, log_errors=False)
     
     if wget_output:
-        logger.debug("Found active wget processes via ps command")
         for line in wget_output.split('\n'):
             if 'wget' in line and '--proxy' in line:
                 # Extract URL from wget command
@@ -456,7 +488,6 @@ def get_active_prefetch_info():
                         
                     return result
     
-    logger.debug("No active pre-fetch processes found")
     return None
 
 def get_recent_prefetch_info():
