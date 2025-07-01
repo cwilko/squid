@@ -825,11 +825,12 @@ def parse_squid_client_list(raw_data):
                 except (ValueError, IndexError):
                     pass
             
-            # Request type details (indented lines with request types)
-            elif line and line[0] == ' ' and current_client and not line.startswith("    ICP"):
-                # Skip ICP lines, parse HTTP request types
+            # Request type details (lines with 8 spaces indentation)
+            elif line.startswith("        ") and current_client and not line.startswith("        ICP"):
+                # Parse HTTP request types with 8-space indentation
                 # Format: "        TCP_HIT                    1  50%"
-                parts = line.split()
+                # Skip ICP lines and HTTP header lines
+                parts = line.strip().split()
                 if len(parts) >= 3:
                     try:
                         request_type = parts[0]
