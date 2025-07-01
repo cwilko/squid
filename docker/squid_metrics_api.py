@@ -240,6 +240,37 @@ def get_file_size_from_logs(pid):
     progress_info = get_download_progress_from_logs(pid)
     return progress_info['file_size_mb'] if progress_info else None
 
+def calculate_average_speed(downloaded_mb, started_at_iso, completed_at_iso=None):
+    """Calculate average download speed in MB/s given downloaded MB and start/end times"""
+    if not downloaded_mb or not started_at_iso:
+        return None
+    
+    try:
+        # Parse start time ISO timestamp (remove 'Z' suffix if present)
+        start_time_str = started_at_iso.rstrip('Z')
+        start_time = datetime.fromisoformat(start_time_str)
+        
+        # Use completion time if provided (for completed downloads), otherwise current time (for active downloads)
+        if completed_at_iso:
+            end_time_str = completed_at_iso.rstrip('Z')
+            end_time = datetime.fromisoformat(end_time_str)
+        else:
+            end_time = datetime.utcnow()
+        
+        # Calculate elapsed time in seconds
+        elapsed_seconds = (end_time - start_time).total_seconds()
+        
+        if elapsed_seconds <= 0:
+            return None
+            
+        # Calculate speed in MB/s
+        speed_mbps = downloaded_mb / elapsed_seconds
+        return round(speed_mbps, 3)  # Round to 3 decimal places
+        
+    except (ValueError, TypeError) as e:
+        logger.debug(f"Error calculating average speed: {e}")
+        return None
+
 def parse_wget_log(log_file_path):
     """Parse wget log to extract completion status and file size"""
     try:
@@ -418,6 +449,12 @@ def get_active_prefetch_info():
                                 if started_at:
                                     result['started_at'] = started_at
                                     
+                                    # Calculate average download speed for failed downloads too
+                                    if downloaded_mb is not None:
+                                        avg_speed = calculate_average_speed(downloaded_mb, started_at)
+                                        if avg_speed is not None:
+                                            result['average_speed_mbps'] = avg_speed
+                                    
                                 return result
                     
                     # Get the command line of the process
@@ -470,6 +507,12 @@ def get_active_prefetch_info():
                                 result['progress_percent'] = progress_percent
                             if started_at:
                                 result['started_at'] = started_at
+                                
+                                # Calculate average download speed
+                                if downloaded_mb is not None:
+                                    avg_speed = calculate_average_speed(downloaded_mb, started_at)
+                                    if avg_speed is not None:
+                                        result['average_speed_mbps'] = avg_speed
                                 
                             return result
         except Exception as e:
@@ -572,6 +615,14 @@ def get_recent_prefetch_info():
             try:
                 completed_at = datetime.fromtimestamp(log_mtime).isoformat() + 'Z'
                 result['completed_at'] = completed_at
+                
+                # Calculate average download speed for completed downloads
+                if started_at and result.get('file_size_mb') is not None:
+                    # For completed downloads, use file size as downloaded amount and completion time
+                    avg_speed = calculate_average_speed(result['file_size_mb'], started_at, completed_at)
+                    if avg_speed is not None:
+                        result['average_speed_mbps'] = avg_speed
+                        
             except:
                 pass
                 
@@ -650,6 +701,100 @@ def health_check():
         'timestamp': datetime.utcnow().isoformat()
     })
 
+def get_access_log_lines(num_lines=5):
+    """Get the last N lines from access.log"""
+    access_log_path = '/var/log/squid/access.log'
+    
+    try:
+        if not os.path.exists(access_log_path):
+            return {'path': access_log_path, 'last_lines': [], 'line_count': 0}
+        
+        # Use tail command to get last N lines efficiently
+        tail_cmd = f"tail -n {num_lines} '{access_log_path}'"
+        output = run_command(tail_cmd, log_errors=False)
+        
+        if output:
+            lines = output.split('\n')
+            # Filter out empty lines
+            lines = [line.strip() for line in lines if line.strip()]
+            return {
+                'path': access_log_path,
+                'last_lines': lines,
+                'line_count': len(lines)
+            }
+        else:
+            return {'path': access_log_path, 'last_lines': [], 'line_count': 0}
+            
+    except Exception as e:
+        logger.error(f"Error reading access log: {e}")
+        return {'path': access_log_path, 'last_lines': [], 'line_count': 0}
+
+def get_wget_processes():
+    """Get information about running wget processes"""
+    ps_cmd = "ps -ef | grep wget"
+    
+    try:
+        output = run_command(ps_cmd, log_errors=False)
+        
+        processes = []
+        if output:
+            lines = output.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line or 'grep wget' in line:
+                    continue
+                
+                # Parse ps -ef output: UID PID PPID C STIME TTY TIME CMD
+                parts = line.split(None, 7)  # Split into max 8 parts
+                if len(parts) >= 8:
+                    try:
+                        process_info = {
+                            'user': parts[0],
+                            'pid': int(parts[1]),
+                            'ppid': int(parts[2]),
+                            'cpu_percent': parts[3],
+                            'start_time': parts[4],
+                            'tty': parts[5],
+                            'time': parts[6],
+                            'command': parts[7]
+                        }
+                        processes.append(process_info)
+                    except (ValueError, IndexError):
+                        # Skip lines that don't parse correctly
+                        continue
+        
+        return {
+            'command': ps_cmd,
+            'processes': processes,
+            'process_count': len(processes)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting wget processes: {e}")
+        return {
+            'command': ps_cmd,
+            'processes': [],
+            'process_count': 0
+        }
+
+@app.route('/api/debug', methods=['GET'])
+def get_debug_info():
+    """Get debug information including access log and wget processes"""
+    # Get access log lines
+    access_log_info = get_access_log_lines(5)
+    
+    # Get wget process information
+    wget_info = get_wget_processes()
+    
+    # Build response
+    response = {
+        'access_log': access_log_info,
+        'wget_processes': wget_info,
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    }
+    
+    return jsonify(response)
+
 @app.route('/api/metrics', methods=['GET'])
 def list_metrics():
     """List available API endpoints"""
@@ -664,6 +809,11 @@ def list_metrics():
                 'name': 'health',
                 'endpoint': '/api/health', 
                 'description': 'API health check'
+            },
+            {
+                'name': 'debug',
+                'endpoint': '/api/debug',
+                'description': 'Debug information including access log and wget processes'
             }
         ],
         'timestamp': datetime.utcnow().isoformat() + 'Z'
