@@ -127,6 +127,31 @@ cleanup_cache_contents() {
     fi
 }
 
+# Function to configure wget to use Squid proxy
+configure_wget_proxy() {
+    local wgetrc="/etc/wgetrc"
+    
+    log "Configuring wget to use Squid proxy..."
+    
+    # Check if proxy configuration already exists
+    if [ -f "$wgetrc" ] && grep -q "http_proxy.*127.0.0.1:3128" "$wgetrc" 2>/dev/null; then
+        log "wget proxy configuration already exists"
+        return 0
+    fi
+    
+    # Add or update proxy configuration
+    {
+        echo ""
+        echo "# Squid proxy configuration (added by container)"
+        echo "http_proxy = http://127.0.0.1:3128"
+        echo "https_proxy = http://127.0.0.1:3128"
+        echo "ftp_proxy = http://127.0.0.1:3128"
+        echo "use_proxy = on"
+    } >> "$wgetrc"
+    
+    log "wget proxy configuration completed"
+}
+
 # Function to initialize squid cache
 init_cache() {
     if [ ! -d "$SQUID_CACHE_DIR/00" ]; then
@@ -343,6 +368,9 @@ main() {
     
     # Clean up old prefetch files
     cleanup_prefetch_files
+    
+    # Configure wget to use Squid proxy
+    configure_wget_proxy
     
     # Initialize SSL database
     init_ssl_db
