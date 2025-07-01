@@ -805,7 +805,7 @@ def reset_prefetch_system():
                     try:
                         pid = int(parts[1])
                         # Kill the process
-                        kill_cmd = f"kill -TERM {pid}"
+                        kill_cmd = f"sudo kill -TERM {pid}"
                         if run_command(kill_cmd, log_errors=False):
                             results['wget_processes_killed'] += 1
                             logger.info(f"Killed wget process PID {pid}")
