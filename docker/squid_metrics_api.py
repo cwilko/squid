@@ -804,13 +804,73 @@ def reset_prefetch_system():
                 if len(parts) >= 2:
                     try:
                         pid = int(parts[1])
-                        # Kill the process
+                        user = parts[0]
+                        command = parts[7] if len(parts) > 7 else "unknown"
+                        
+                        logger.info(f"Attempting to kill wget process PID {pid} (user: {user})")
+                        
+                        # Try multiple approaches to kill the process
+                        killed = False
+                        kill_methods = []
+                        
+                        # Method 1: sudo kill -TERM (graceful)
                         kill_cmd = f"sudo kill -TERM {pid}"
-                        if run_command(kill_cmd, log_errors=False):
+                        kill_methods.append(f"sudo SIGTERM")
+                        result = run_command(kill_cmd, log_errors=False)
+                        if result is not None:
+                            # Verify process is actually gone
+                            check_cmd = f"kill -0 {pid}"
+                            check_result = run_command(check_cmd, log_errors=False)
+                            if check_result is None:  # Process is gone
+                                killed = True
+                                logger.info(f"Successfully killed PID {pid} with sudo SIGTERM")
+                        
+                        # Method 2: sudo kill -9 (force kill)
+                        if not killed:
+                            kill_cmd = f"sudo kill -9 {pid}"
+                            kill_methods.append(f"sudo SIGKILL")
+                            result = run_command(kill_cmd, log_errors=False)
+                            if result is not None:
+                                # Verify process is actually gone
+                                check_cmd = f"kill -0 {pid}"
+                                check_result = run_command(check_cmd, log_errors=False)
+                                if check_result is None:  # Process is gone
+                                    killed = True
+                                    logger.info(f"Successfully killed PID {pid} with sudo SIGKILL")
+                        
+                        # Method 3: Direct kill without sudo
+                        if not killed:
+                            kill_cmd = f"kill -TERM {pid}"
+                            kill_methods.append(f"direct SIGTERM")
+                            result = run_command(kill_cmd, log_errors=False)
+                            if result is not None:
+                                # Verify process is actually gone
+                                check_cmd = f"kill -0 {pid}"
+                                check_result = run_command(check_cmd, log_errors=False)
+                                if check_result is None:  # Process is gone
+                                    killed = True
+                                    logger.info(f"Successfully killed PID {pid} with direct SIGTERM")
+                        
+                        # Method 4: pkill as last resort
+                        if not killed:
+                            pkill_cmd = f"sudo pkill -TERM -f 'wget.*real-debrid'"
+                            kill_methods.append(f"pkill")
+                            result = run_command(pkill_cmd, log_errors=False)
+                            if result is not None:
+                                # Check if our specific PID is gone
+                                check_cmd = f"kill -0 {pid}"
+                                check_result = run_command(check_cmd, log_errors=False)
+                                if check_result is None:  # Process is gone
+                                    killed = True
+                                    logger.info(f"Successfully killed PID {pid} with pkill")
+                        
+                        if killed:
                             results['wget_processes_killed'] += 1
-                            logger.info(f"Killed wget process PID {pid}")
                         else:
-                            results['errors'].append(f"Failed to kill wget process PID {pid}")
+                            error_msg = f"Failed to kill wget process PID {pid} (user: {user}) - tried: {', '.join(kill_methods)}"
+                            results['errors'].append(error_msg)
+                            logger.warning(error_msg)
+                            
                     except (ValueError, IndexError):
                         continue
         
