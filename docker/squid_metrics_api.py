@@ -785,6 +785,7 @@ def parse_squid_client_list(raw_data):
         current_client = None
         
         for line in lines:
+            original_line = line  # Keep original for indentation checking
             line = line.strip()
             
             # Skip empty lines and headers
@@ -825,23 +826,24 @@ def parse_squid_client_list(raw_data):
                 except (ValueError, IndexError):
                     pass
             
-            # Request type details (lines with 8 spaces indentation)
-            elif line.startswith("        ") and current_client and not line.startswith("        ICP"):
+            # Request type details (check original line for exact indentation)
+            elif original_line.startswith("        ") and current_client:
                 # Parse HTTP request types with 8-space indentation
                 # Format: "        TCP_HIT                    1  50%"
-                # Skip ICP lines and HTTP header lines
-                parts = line.strip().split()
-                if len(parts) >= 3:
-                    try:
-                        request_type = parts[0]
-                        count = int(parts[1])
-                        percentage = int(parts[2].rstrip('%'))
-                        current_client['request_types'][request_type] = {
-                            'count': count,
-                            'percentage': percentage
-                        }
-                    except (ValueError, IndexError):
-                        pass
+                # Skip ICP lines 
+                if not line.startswith("ICP"):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        try:
+                            request_type = parts[0]
+                            count = int(parts[1])
+                            percentage = int(parts[2].rstrip('%'))
+                            current_client['request_types'][request_type] = {
+                                'count': count,
+                                'percentage': percentage
+                            }
+                        except (ValueError, IndexError):
+                            pass
         
         # Add the last client
         if current_client:
