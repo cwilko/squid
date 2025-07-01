@@ -284,6 +284,27 @@ def parse_wget_log(log_file_path):
         logger.error(f"Error reading wget log {log_file_path}: {e}")
         return {'status': 'failed', 'file_size_mb': None}
 
+def extract_start_time_from_log_filename(log_filename):
+    """Extract start timestamp from wget log filename format: wget_progress_{timestamp}_{pid}.log"""
+    try:
+        # Extract timestamp from filename
+        # Format: wget_progress_1751365237_121.log
+        parts = log_filename.split('_')
+        if len(parts) >= 3 and parts[0] == 'wget' and parts[1] == 'progress':
+            timestamp_str = parts[2]
+            try:
+                timestamp = int(timestamp_str)
+                return datetime.fromtimestamp(timestamp).isoformat() + 'Z'
+            except (ValueError, OSError):
+                logger.debug(f"Invalid timestamp in filename: {timestamp_str}")
+                return None
+        else:
+            logger.debug(f"Filename doesn't match expected format: {log_filename}")
+            return None
+    except Exception as e:
+        logger.error(f"Error extracting timestamp from filename {log_filename}: {e}")
+        return None
+
 def find_most_recent_log_file():
     """Find the most recent wget progress log file"""
     try:
@@ -505,7 +526,7 @@ def get_recent_prefetch_info():
             return None
         
         # Extract filename from log file name
-        # Format: wget_progress_YYYYMMDD_HHMMSS_PID.log
+        # Format: wget_progress_{timestamp}_{pid}.log
         log_filename = os.path.basename(recent_log)
         
         # Try to get URL from lock file if it exists
@@ -542,14 +563,12 @@ def get_recent_prefetch_info():
                 if file_size_mb is not None:
                     result['file_size_mb'] = file_size_mb
             
-            # Add start time from log file creation
-            try:
-                started_at = datetime.fromtimestamp(log_mtime).isoformat() + 'Z'
+            # Add start time from log filename
+            started_at = extract_start_time_from_log_filename(log_filename)
+            if started_at:
                 result['started_at'] = started_at
-            except:
-                pass
             
-            # Add completion time
+            # Add completion time (use file modification time)
             try:
                 completed_at = datetime.fromtimestamp(log_mtime).isoformat() + 'Z'
                 result['completed_at'] = completed_at
@@ -568,12 +587,10 @@ def get_recent_prefetch_info():
             if wget_result['file_size_mb'] is not None:
                 result['file_size_mb'] = wget_result['file_size_mb']
             
-            # Add start time from log file creation
-            try:
-                started_at = datetime.fromtimestamp(log_mtime).isoformat() + 'Z'
+            # Add start time from log filename
+            started_at = extract_start_time_from_log_filename(log_filename)
+            if started_at:
                 result['started_at'] = started_at
-            except:
-                pass
                 
             return result
             

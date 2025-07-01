@@ -68,18 +68,10 @@ cleanup_prefetch_files() {
             rm -f "$log_dir/squid_prefetch.pid"
         fi
         
-        # Remove wget log files older than 24 hours
-        local old_logs=$(find "$log_dir" -name "wget_progress_*.log" -type f -mtime +1 2>/dev/null || true)
-        if [ -n "$old_logs" ]; then
-            log "Removing old wget log files (older than 24 hours)"
-            find "$log_dir" -name "wget_progress_*.log" -type f -mtime +1 -delete 2>/dev/null || true
-        fi
-        
-        # Remove empty wget log files (failed downloads that produced no output)
-        local empty_logs=$(find "$log_dir" -name "wget_progress_*.log" -type f -empty 2>/dev/null || true)
-        if [ -n "$empty_logs" ]; then
-            log "Removing empty wget log files"
-            find "$log_dir" -name "wget_progress_*.log" -type f -empty -delete 2>/dev/null || true
+        # Remove ALL wget log files (clean slate on startup)
+        if find "$log_dir" -name "wget_progress_*.log" -type f -print -quit 2>/dev/null | grep -q .; then
+            log "Removing all existing wget log files"
+            find "$log_dir" -name "wget_progress_*.log" -type f -delete 2>/dev/null || true
         fi
         
         log "Prefetch file cleanup completed"
