@@ -777,6 +777,123 @@ def get_wget_processes():
             'process_count': 0
         }
 
+def reset_prefetch_system():
+    """Reset the entire prefetch system by killing processes and cleaning files"""
+    results = {
+        'wget_processes_killed': 0,
+        'lock_files_cleaned': 0,
+        'log_files_cleaned': 0,
+        'errors': []
+    }
+    
+    try:
+        # 1. Kill all wget processes
+        logger.info("Killing all wget processes...")
+        ps_cmd = "ps -ef | grep wget | grep -v grep"
+        output = run_command(ps_cmd, log_errors=False)
+        
+        if output:
+            lines = output.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # Parse ps output to get PID
+                parts = line.split(None, 7)
+                if len(parts) >= 2:
+                    try:
+                        pid = int(parts[1])
+                        # Kill the process
+                        kill_cmd = f"kill -TERM {pid}"
+                        if run_command(kill_cmd, log_errors=False):
+                            results['wget_processes_killed'] += 1
+                            logger.info(f"Killed wget process PID {pid}")
+                        else:
+                            results['errors'].append(f"Failed to kill wget process PID {pid}")
+                    except (ValueError, IndexError):
+                        continue
+        
+        # 2. Clean up lock files
+        logger.info("Cleaning up prefetch lock files...")
+        lock_files = [
+            '/var/log/squid/squid_prefetch.lock',
+            '/var/log/squid/squid_prefetch.pid'
+        ]
+        
+        for lock_file in lock_files:
+            try:
+                if os.path.exists(lock_file):
+                    os.remove(lock_file)
+                    results['lock_files_cleaned'] += 1
+                    logger.info(f"Removed lock file: {lock_file}")
+            except OSError as e:
+                results['errors'].append(f"Failed to remove {lock_file}: {e}")
+        
+        # 3. Clean up wget log files
+        logger.info("Cleaning up wget log files...")
+        log_dir = '/var/log/squid'
+        if os.path.exists(log_dir):
+            try:
+                # Find all wget_progress_*.log files
+                find_cmd = f"find '{log_dir}' -name 'wget_progress_*.log' -type f"
+                output = run_command(find_cmd, log_errors=False)
+                
+                if output:
+                    log_files = output.split('\n')
+                    for log_file in log_files:
+                        log_file = log_file.strip()
+                        if log_file and os.path.exists(log_file):
+                            try:
+                                os.remove(log_file)
+                                results['log_files_cleaned'] += 1
+                                logger.info(f"Removed wget log file: {log_file}")
+                            except OSError as e:
+                                results['errors'].append(f"Failed to remove {log_file}: {e}")
+            except Exception as e:
+                results['errors'].append(f"Error finding wget log files: {e}")
+        
+        logger.info(f"Reset complete: {results}")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error during prefetch system reset: {e}")
+        results['errors'].append(f"Unexpected error: {e}")
+        return results
+
+@app.route('/api/reset', methods=['POST'])
+def reset_prefetch():
+    """Reset the prefetch system by killing processes and cleaning files"""
+    try:
+        reset_results = reset_prefetch_system()
+        
+        # Determine success status
+        has_errors = len(reset_results['errors']) > 0
+        status = 'completed_with_errors' if has_errors else 'success'
+        
+        response = {
+            'status': status,
+            'summary': {
+                'wget_processes_killed': reset_results['wget_processes_killed'],
+                'lock_files_cleaned': reset_results['lock_files_cleaned'], 
+                'log_files_cleaned': reset_results['log_files_cleaned']
+            },
+            'errors': reset_results['errors'],
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }
+        
+        # Return 200 for success, 207 for partial success with errors
+        status_code = 207 if has_errors else 200
+        return jsonify(response), status_code
+        
+    except Exception as e:
+        logger.error(f"Error in reset endpoint: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Reset operation failed: {e}',
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }), 500
+
 @app.route('/api/debug', methods=['GET'])
 def get_debug_info():
     """Get debug information including access log and wget processes"""
@@ -803,17 +920,26 @@ def list_metrics():
             {
                 'name': 'status',
                 'endpoint': '/api/status',
+                'method': 'GET',
                 'description': 'Comprehensive Squid cache and download status information'
             },
             {
                 'name': 'health',
-                'endpoint': '/api/health', 
+                'endpoint': '/api/health',
+                'method': 'GET', 
                 'description': 'API health check'
             },
             {
                 'name': 'debug',
                 'endpoint': '/api/debug',
+                'method': 'GET',
                 'description': 'Debug information including access log and wget processes'
+            },
+            {
+                'name': 'reset',
+                'endpoint': '/api/reset',
+                'method': 'POST',
+                'description': 'Reset prefetch system by killing wget processes and cleaning lock/log files'
             }
         ],
         'timestamp': datetime.utcnow().isoformat() + 'Z'
