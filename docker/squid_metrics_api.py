@@ -729,8 +729,8 @@ def get_access_log_lines(num_lines=5):
         logger.error(f"Error reading access log: {e}")
         return {'path': access_log_path, 'last_lines': [], 'line_count': 0}
 
-def get_wget_processes():
-    """Get information about running wget processes"""
+def get_prefetch_processes():
+    """Get information about running prefetch processes"""
     ps_cmd = "ps -ef | grep wget"
     
     try:
@@ -770,11 +770,136 @@ def get_wget_processes():
         }
         
     except Exception as e:
-        logger.error(f"Error getting wget processes: {e}")
+        logger.error(f"Error getting prefetch processes: {e}")
         return {
             'command': ps_cmd,
             'processes': [],
             'process_count': 0
+        }
+
+def parse_squid_client_list(raw_data):
+    """Parse Squid cache manager client list data into structured format"""
+    try:
+        clients = []
+        lines = raw_data.split('\n')
+        current_client = None
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Skip empty lines and headers
+            if not line or line == "Cache Clients:":
+                continue
+                
+            # Stop at TOTALS section (we don't care about totals)
+            if line.startswith("TOTALS"):
+                break
+            
+            # New client address
+            if line.startswith("Address:"):
+                if current_client:
+                    clients.append(current_client)
+                current_client = {
+                    'address': line.split(":", 1)[1].strip(),
+                    'name': None,
+                    'established_connections': 0,
+                    'http_requests': 0,
+                    'request_types': {}
+                }
+            
+            # Client name
+            elif line.startswith("Name:") and current_client:
+                current_client['name'] = line.split(":", 1)[1].strip()
+            
+            # Established connections
+            elif line.startswith("Currently established connections:") and current_client:
+                try:
+                    current_client['established_connections'] = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            
+            # HTTP Requests count
+            elif line.startswith("HTTP Requests") and current_client:
+                try:
+                    current_client['http_requests'] = int(line.split()[2])
+                except (ValueError, IndexError):
+                    pass
+            
+            # Request type details (indented lines with request types)
+            elif line and line[0] == ' ' and current_client and not line.startswith("    ICP"):
+                # Skip ICP lines, parse HTTP request types
+                # Format: "        TCP_HIT                    1  50%"
+                parts = line.split()
+                if len(parts) >= 3:
+                    try:
+                        request_type = parts[0]
+                        count = int(parts[1])
+                        percentage = int(parts[2].rstrip('%'))
+                        current_client['request_types'][request_type] = {
+                            'count': count,
+                            'percentage': percentage
+                        }
+                    except (ValueError, IndexError):
+                        pass
+        
+        # Add the last client
+        if current_client:
+            clients.append(current_client)
+        
+        return {
+            'clients': clients
+        }
+        
+    except Exception as e:
+        logger.debug(f"Error parsing squid client list: {e}")
+        return None
+
+def get_squid_client_list():
+    """Get Squid cache manager client list data"""
+    cache_mgr_url = "http://127.0.0.1:3128/squid-internal-mgr/client_list"
+    
+    try:
+        # Make request to Squid cache manager
+        response = requests.get(
+            cache_mgr_url,
+            timeout=10,
+            headers={'User-Agent': 'Squid-Metrics-API/1.0'}
+        )
+        
+        # Check if request was successful
+        response.raise_for_status()
+        
+        raw_data = response.text
+        
+        # Attempt to parse the data
+        parsed_data = parse_squid_client_list(raw_data)
+        parse_error = None if parsed_data else "Failed to parse client list data"
+        
+        return {
+            'url': cache_mgr_url,
+            'status': 'success',
+            'raw_data': raw_data,
+            'parsed_data': parsed_data,
+            'parse_error': parse_error
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error fetching squid client list: {e}")
+        return {
+            'url': cache_mgr_url,
+            'status': 'error',
+            'raw_data': None,
+            'parsed_data': None,
+            'parse_error': f"Network error: {e}"
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error getting squid client list: {e}")
+        return {
+            'url': cache_mgr_url,
+            'status': 'error', 
+            'raw_data': None,
+            'parsed_data': None,
+            'parse_error': f"Unexpected error: {e}"
         }
 
 def reset_prefetch_system():
@@ -804,114 +929,64 @@ def reset_prefetch_system():
                 if len(parts) >= 2:
                     try:
                         pid = int(parts[1])
-                        user = parts[0]
-                        command = parts[7] if len(parts) > 7 else "unknown"
                         
-                        logger.info(f"Attempting to kill wget process PID {pid} (user: {user})")
-                        
-                        # Try multiple approaches to kill the process
-                        killed = False
-                        kill_methods = []
-                        
-                        # Method 1: sudo kill -TERM (graceful)
+                        # Kill the process with sudo SIGTERM
                         kill_cmd = f"sudo kill -TERM {pid}"
-                        kill_methods.append(f"sudo SIGTERM")
                         result = run_command(kill_cmd, log_errors=False)
                         if result is not None:
-                            # Verify process is actually gone
-                            check_cmd = f"kill -0 {pid}"
-                            check_result = run_command(check_cmd, log_errors=False)
-                            if check_result is None:  # Process is gone
-                                killed = True
-                                logger.info(f"Successfully killed PID {pid} with sudo SIGTERM")
-                        
-                        # Method 2: sudo kill -9 (force kill)
-                        if not killed:
-                            kill_cmd = f"sudo kill -9 {pid}"
-                            kill_methods.append(f"sudo SIGKILL")
-                            result = run_command(kill_cmd, log_errors=False)
-                            if result is not None:
-                                # Verify process is actually gone
-                                check_cmd = f"kill -0 {pid}"
-                                check_result = run_command(check_cmd, log_errors=False)
-                                if check_result is None:  # Process is gone
-                                    killed = True
-                                    logger.info(f"Successfully killed PID {pid} with sudo SIGKILL")
-                        
-                        # Method 3: Direct kill without sudo
-                        if not killed:
-                            kill_cmd = f"kill -TERM {pid}"
-                            kill_methods.append(f"direct SIGTERM")
-                            result = run_command(kill_cmd, log_errors=False)
-                            if result is not None:
-                                # Verify process is actually gone
-                                check_cmd = f"kill -0 {pid}"
-                                check_result = run_command(check_cmd, log_errors=False)
-                                if check_result is None:  # Process is gone
-                                    killed = True
-                                    logger.info(f"Successfully killed PID {pid} with direct SIGTERM")
-                        
-                        # Method 4: pkill as last resort
-                        if not killed:
-                            pkill_cmd = f"sudo pkill -TERM -f 'wget.*real-debrid'"
-                            kill_methods.append(f"pkill")
-                            result = run_command(pkill_cmd, log_errors=False)
-                            if result is not None:
-                                # Check if our specific PID is gone
-                                check_cmd = f"kill -0 {pid}"
-                                check_result = run_command(check_cmd, log_errors=False)
-                                if check_result is None:  # Process is gone
-                                    killed = True
-                                    logger.info(f"Successfully killed PID {pid} with pkill")
-                        
-                        if killed:
                             results['wget_processes_killed'] += 1
+                            logger.info(f"Successfully killed wget process PID {pid}")
                         else:
-                            error_msg = f"Failed to kill wget process PID {pid} (user: {user}) - tried: {', '.join(kill_methods)}"
-                            results['errors'].append(error_msg)
-                            logger.warning(error_msg)
+                            results['errors'].append(f"Failed to kill wget process PID {pid}")
                             
                     except (ValueError, IndexError):
                         continue
         
-        # 2. Clean up lock files
-        logger.info("Cleaning up prefetch lock files...")
-        lock_files = [
-            '/var/log/squid/squid_prefetch.lock',
-            '/var/log/squid/squid_prefetch.pid'
-        ]
+        # Check if all wget processes were killed successfully
+        wget_kill_failed = any("Failed to kill wget process" in error for error in results['errors'])
         
-        for lock_file in lock_files:
-            try:
-                if os.path.exists(lock_file):
-                    os.remove(lock_file)
-                    results['lock_files_cleaned'] += 1
-                    logger.info(f"Removed lock file: {lock_file}")
-            except OSError as e:
-                results['errors'].append(f"Failed to remove {lock_file}: {e}")
-        
-        # 3. Clean up wget log files
-        logger.info("Cleaning up wget log files...")
-        log_dir = '/var/log/squid'
-        if os.path.exists(log_dir):
-            try:
-                # Find all wget_progress_*.log files
-                find_cmd = f"find '{log_dir}' -name 'wget_progress_*.log' -type f"
-                output = run_command(find_cmd, log_errors=False)
-                
-                if output:
-                    log_files = output.split('\n')
-                    for log_file in log_files:
-                        log_file = log_file.strip()
-                        if log_file and os.path.exists(log_file):
-                            try:
-                                os.remove(log_file)
-                                results['log_files_cleaned'] += 1
-                                logger.info(f"Removed wget log file: {log_file}")
-                            except OSError as e:
-                                results['errors'].append(f"Failed to remove {log_file}: {e}")
-            except Exception as e:
-                results['errors'].append(f"Error finding wget log files: {e}")
+        if wget_kill_failed:
+            logger.warning("Some wget processes could not be killed - skipping file cleanup to avoid inconsistent state")
+            results['errors'].append("Skipped lock and log file cleanup due to running wget processes")
+        else:
+            # 2. Clean up lock files
+            logger.info("Cleaning up prefetch lock files...")
+            lock_files = [
+                '/var/log/squid/squid_prefetch.lock',
+                '/var/log/squid/squid_prefetch.pid'
+            ]
+            
+            for lock_file in lock_files:
+                try:
+                    if os.path.exists(lock_file):
+                        os.remove(lock_file)
+                        results['lock_files_cleaned'] += 1
+                        logger.info(f"Removed lock file: {lock_file}")
+                except OSError as e:
+                    results['errors'].append(f"Failed to remove {lock_file}: {e}")
+            
+            # 3. Clean up wget log files
+            logger.info("Cleaning up wget log files...")
+            log_dir = '/var/log/squid'
+            if os.path.exists(log_dir):
+                try:
+                    # Find all wget_progress_*.log files
+                    find_cmd = f"find '{log_dir}' -name 'wget_progress_*.log' -type f"
+                    output = run_command(find_cmd, log_errors=False)
+                    
+                    if output:
+                        log_files = output.split('\n')
+                        for log_file in log_files:
+                            log_file = log_file.strip()
+                            if log_file and os.path.exists(log_file):
+                                try:
+                                    os.remove(log_file)
+                                    results['log_files_cleaned'] += 1
+                                    logger.info(f"Removed wget log file: {log_file}")
+                                except OSError as e:
+                                    results['errors'].append(f"Failed to remove {log_file}: {e}")
+                except Exception as e:
+                    results['errors'].append(f"Error finding wget log files: {e}")
         
         logger.info(f"Reset complete: {results}")
         return results
@@ -956,17 +1031,21 @@ def reset_prefetch():
 
 @app.route('/api/debug', methods=['GET'])
 def get_debug_info():
-    """Get debug information including access log and wget processes"""
+    """Get debug information including access log, prefetch processes, and squid client list"""
     # Get access log lines
     access_log_info = get_access_log_lines(5)
     
-    # Get wget process information
-    wget_info = get_wget_processes()
+    # Get prefetch process information
+    prefetch_info = get_prefetch_processes()
+    
+    # Get squid cache manager client list
+    client_list_info = get_squid_client_list()
     
     # Build response
     response = {
         'access_log': access_log_info,
-        'wget_processes': wget_info,
+        'prefetch_processes': prefetch_info,
+        'squid_client_list': client_list_info,
         'timestamp': datetime.utcnow().isoformat() + 'Z'
     }
     
@@ -993,13 +1072,13 @@ def list_metrics():
                 'name': 'debug',
                 'endpoint': '/api/debug',
                 'method': 'GET',
-                'description': 'Debug information including access log and wget processes'
+                'description': 'Debug information including access log, prefetch processes, and squid client list'
             },
             {
                 'name': 'reset',
                 'endpoint': '/api/reset',
                 'method': 'POST',
-                'description': 'Reset prefetch system by killing wget processes and cleaning lock/log files'
+                'description': 'Reset prefetch system by killing prefetch processes and cleaning lock/log files'
             }
         ],
         'timestamp': datetime.utcnow().isoformat() + 'Z'
