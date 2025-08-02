@@ -195,10 +195,6 @@ ENV RANGE_FORWARD=on
 ENV SQUID_API_LOG_LEVEL=INFO
 ENV SQUID_CLEANUP_CACHE_ON_START=on
 
-# Add health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD /usr/bin/squid -k check || exit 1
-
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/usr/sbin/squid", "-NYCd", "1"]

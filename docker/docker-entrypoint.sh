@@ -119,6 +119,24 @@ cleanup_cache_contents() {
     fi
 }
 
+# Function to create symlinks for kubectl logs
+create_kubectl_log_symlinks() {
+    local log_dir="$SQUID_LOG_DIR"
+    
+    log "Creating symlinks for kubectl logs..."
+    
+    # Ensure log directory exists
+    mkdir -p "$log_dir"
+    
+    # Create symlinks to stdout/stderr for kubectl logs
+    ln -sf /proc/self/fd/1 "$log_dir/stdout.log"
+    ln -sf /proc/self/fd/2 "$log_dir/stderr.log"
+    
+    log "Symlinks created:"
+    log "  $log_dir/stdout.log -> /proc/self/fd/1 (stdout)"
+    log "  $log_dir/stderr.log -> /proc/self/fd/2 (stderr)"
+}
+
 # Function to configure wget to use Squid proxy
 configure_wget_proxy() {
     local wgetrc="/etc/wgetrc"
@@ -360,6 +378,9 @@ main() {
     
     # Clean up old prefetch files
     cleanup_prefetch_files
+    
+    # Create symlinks for kubectl logs
+    create_kubectl_log_symlinks
     
     # Configure wget to use Squid proxy
     configure_wget_proxy
