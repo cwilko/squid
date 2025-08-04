@@ -29,7 +29,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: cwilko/squid
+  IMAGE_NAME: wilkobets/squid
 
 jobs:
   build:
@@ -72,7 +72,7 @@ jobs:
         labels: |
           org.opencontainers.image.title=Enhanced Squid Proxy
           org.opencontainers.image.description=Squid Proxy with Range Forwarding optimization for large file downloads
-          org.opencontainers.image.vendor=cwilko
+          org.opencontainers.image.vendor=wilkobets
           org.opencontainers.image.licenses=GPL-2.0+
           org.opencontainers.image.source=https://github.com/cwilko/squid
           org.opencontainers.image.documentation=https://github.com/cwilko/squid/blob/v5/docker/README.md
