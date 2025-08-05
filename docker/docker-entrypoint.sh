@@ -125,14 +125,19 @@ create_kubectl_log_symlinks() {
     
     log "Creating symlinks for kubectl logs..."
     
-    # Ensure log directory exists
+    # Ensure log directory exists and has proper ownership
     mkdir -p "$log_dir"
+    chown -R proxy:proxy "$log_dir"
+    chmod 755 "$log_dir"
     
     # Create symlinks to stdout/stderr for kubectl logs
     ln -sf /proc/self/fd/1 "$log_dir/stdout.log"
     ln -sf /proc/self/fd/2 "$log_dir/stderr.log"
     
-    log "Symlinks created:"
+    # Ensure symlinks are accessible by proxy user
+    chown proxy:proxy "$log_dir/stdout.log" "$log_dir/stderr.log"
+    
+    log "Symlinks created with proper permissions:"
     log "  $log_dir/stdout.log -> /proc/self/fd/1 (stdout)"
     log "  $log_dir/stderr.log -> /proc/self/fd/2 (stderr)"
 }
