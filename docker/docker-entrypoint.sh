@@ -130,9 +130,9 @@ create_kubectl_log_symlinks() {
     chown -R proxy:proxy "$log_dir"
     chmod 755 "$log_dir"
     
-    # Create symlinks to stdout/stderr for kubectl logs
-    ln -sf /proc/self/fd/1 "$log_dir/stdout.log"
-    ln -sf /proc/self/fd/2 "$log_dir/stderr.log"
+    # Create symlinks to main process stdout for kubectl logs
+    ln -sf /proc/1/fd/1 "$log_dir/stdout.log"
+    ln -sf /proc/1/fd/1 "$log_dir/stderr.log"
     
     # Ensure symlinks are accessible by proxy user
     chown proxy:proxy "$log_dir/stdout.log" "$log_dir/stderr.log"
