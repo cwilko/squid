@@ -190,25 +190,6 @@ init_cache() {
     fi
 }
 
-# Function to configure range forwarding based on environment
-configure_range_forwarding() {
-    local config_file="$SQUID_CONFIG_FILE"
-    
-    # Check if range_forward_on_cache_miss is already configured
-    if ! grep -q "range_forward_on_cache_miss" "$config_file"; then
-        log "Adding range forwarding configuration..."
-        echo "" >> "$config_file"
-        echo "# Enhanced Range Forwarding Feature (added by container)" >> "$config_file"
-        echo "range_forward_on_cache_miss ${RANGE_FORWARD:-on}" >> "$config_file"
-    else
-        # Update existing configuration
-        if [ "$RANGE_FORWARD" != "on" ] && [ "$RANGE_FORWARD" != "off" ]; then
-            RANGE_FORWARD="on"
-        fi
-        log "Updating range forwarding setting to: $RANGE_FORWARD"
-        sed -i "s/^range_forward_on_cache_miss.*/range_forward_on_cache_miss $RANGE_FORWARD/" "$config_file"
-    fi
-}
 
 # Function to validate configuration
 validate_config() {
@@ -359,11 +340,10 @@ set_permissions() {
 
 # Main initialization
 main() {
-    log "Starting Enhanced Squid with Range Forwarding..."
+    log "Starting Enhanced Squid..."
     log "Configuration file: $SQUID_CONFIG_FILE"
     log "Cache directory: $SQUID_CACHE_DIR"
     log "Log directory: $SQUID_LOG_DIR"
-    log "Range forwarding: ${RANGE_FORWARD:-on}"
     
     # Copy required config files if missing (handles mounted volumes)
     copy_required_configs
@@ -385,9 +365,6 @@ main() {
     
     # Initialize SSL database
     init_ssl_db
-    
-    # Configure range forwarding
-    configure_range_forwarding
     
     # Validate configuration
     validate_config
