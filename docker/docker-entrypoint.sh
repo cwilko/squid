@@ -235,14 +235,7 @@ fix_mounted_volume_permissions() {
         fi
     done
     
-    # Always fix /etc/squid permissions (especially important for mounted configs)
-    local config_dir="$(dirname "$SQUID_CONFIG_FILE")"
-    if [ -d "$config_dir" ]; then
-        log "Fixing permissions for config directory: $config_dir"
-        chown -R proxy:proxy "$config_dir"
-        find "$config_dir" -type f -exec chmod 644 {} \;
-        find "$config_dir" -type d -exec chmod 755 {} \;
-    fi
+    # Skip /etc/squid permissions - mounted as read-only ConfigMaps/secrets
 }
 
 # Function to copy required config files if missing (for mounted volumes)
