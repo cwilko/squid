@@ -354,18 +354,7 @@ set_permissions() {
     chown proxy:proxy /var/run /var/run/squid
     chmod 755 /var/run/squid
     
-    # Ensure config files are readable
-    if [ -f "$SQUID_CONFIG_FILE" ]; then
-        chown proxy:proxy "$SQUID_CONFIG_FILE"
-        chmod 644 "$SQUID_CONFIG_FILE"
-    fi
-    
-    # Ensure mime.conf is readable
-    local config_dir="$(dirname "$SQUID_CONFIG_FILE")"
-    if [ -f "$config_dir/mime.conf" ]; then
-        chown proxy:proxy "$config_dir/mime.conf"
-        chmod 644 "$config_dir/mime.conf"
-    fi
+    # Skip config file permissions - mounted as read-only ConfigMaps
 }
 
 # Main initialization
