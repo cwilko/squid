@@ -130,6 +130,12 @@ create_kubectl_log_symlinks() {
     chown -R proxy:proxy "$log_dir"
     chmod 755 "$log_dir"
     
+    # Clean up any existing named pipe (important for mounted volumes)
+    if [ -p "$log_dir/stdout_pipe" ]; then
+        log "Removing existing named pipe: $log_dir/stdout_pipe"
+        rm -f "$log_dir/stdout_pipe"
+    fi
+    
     # Create symlink for squid access logs to stdout
     ln -sf /proc/self/fd/1 "$log_dir/stdout.log"
     chown proxy:proxy "$log_dir/stdout.log"
