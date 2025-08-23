@@ -130,16 +130,21 @@ create_kubectl_log_symlinks() {
     chown -R proxy:proxy "$log_dir"
     chmod 755 "$log_dir"
     
-    # Create symlinks to main process stdout for kubectl logs
-    ln -sf /proc/1/fd/1 "$log_dir/stdout.log"
-    ln -sf /proc/1/fd/1 "$log_dir/stderr.log"
+    # Create symlink for squid access logs to stdout
+    ln -sf /proc/self/fd/1 "$log_dir/stdout.log"
+    chown proxy:proxy "$log_dir/stdout.log"
     
-    # Ensure symlinks are accessible by proxy user
-    chown proxy:proxy "$log_dir/stdout.log" "$log_dir/stderr.log"
+    # Create named pipe for store ID logs
+    mkfifo "$log_dir/stdout_pipe"
+    chown proxy:proxy "$log_dir/stdout_pipe"
+    chmod 666 "$log_dir/stdout_pipe"
     
-    log "Symlinks created with proper permissions:"
-    log "  $log_dir/stdout.log -> /proc/self/fd/1 (stdout)"
-    log "  $log_dir/stderr.log -> /proc/self/fd/2 (stderr)"
+    # Start background process to forward pipe content to stdout
+    nohup sh -c 'while true; do cat '"$log_dir"'/stdout_pipe || sleep 1; done' >&1 2>/dev/null &
+    
+    log "Logging infrastructure created:"
+    log "  $log_dir/stdout.log -> symlink to stdout (for squid access logs)"
+    log "  $log_dir/stdout_pipe -> named pipe forwarded to stdout (for store ID logs)"
 }
 
 # Function to configure wget to use Squid proxy
@@ -384,7 +389,7 @@ main() {
     # Clean up old prefetch files
     cleanup_prefetch_files
     
-    # Create symlinks for kubectl logs
+    # Create logging infrastructure for kubectl logs
     create_kubectl_log_symlinks
     
     # Configure wget to use Squid proxy
