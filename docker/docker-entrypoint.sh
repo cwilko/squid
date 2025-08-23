@@ -223,7 +223,7 @@ validate_config() {
 # Function to fix mounted volume permissions
 fix_mounted_volume_permissions() {
     # Fix permissions for commonly mounted directories
-    local potential_dirs=("/var/cache/squid" "/var/spool/squid" "$SQUID_LOG_DIR" "/usr/local/scripts")
+    local potential_dirs=("/var/cache/squid" "/var/spool/squid" "$SQUID_LOG_DIR")
     
     for dir in "${potential_dirs[@]}"; do
         if [ -d "$dir" ]; then
